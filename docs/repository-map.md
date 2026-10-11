@@ -42,12 +42,12 @@ examples or fabricated callers are needed to preserve mechanical coverage.
 |---|---|---|---|
 | `cmd/` | `kmx` | — | — |
 | `agentsuite/` | public specification, Go model, schemas and conformance validator | — | conformance fixtures |
-| `internal/` | `kmx/` (17 packages), including schema fixtures | — | experimental lifecycle contracts and tests |
+| `internal/` | `kmx/` (18 packages), including schema fixtures | — | experimental lifecycle contracts and tests |
 | `pkg/` | — | — | experimental KMX target and agent lifecycle contracts |
 | `ax-harness/` | preview projector source only; no built image or kmx adapter | — | synthetic Python tests |
 | `k8s/` | two embedded native manifests | — | native packaging checks |
 | `scripts/` | 4 (4 embedded in the binary, 0 operator) | 0 | 40 (checkers, release packaging, native CI runners, mutation specs) |
-| `docs/` | 33 tracked files; native guides, design and history | — | maintainer and process docs |
+| `docs/` | 34 tracked files; native guides, design and history | — | maintainer and process docs |
 | `brand/` | 7 identity assets for repository and organization surfaces | — | its own checker |
 
 ## `cmd/` — installed CLI
@@ -88,7 +88,7 @@ directory has its own row.
 
 ## `internal/` — CLI packages and retained support
 
-`internal/kmx/` is seventeen packages at the top level (twenty Go packages
+`internal/kmx/` is eighteen packages at the top level (twenty-one Go packages
 including nested `runview/orka`, `agentsuite/agentkit`, and `agentsuite/oras`).
 The short version counts top-level directories.
 The plane module and image-build helper are absent.
@@ -136,6 +136,7 @@ by App tests, not installed with kmx.
 | `kmx/guard` | 2 | Installed | Context-safety checks and read-only target resolution. |
 | `kmx/toolchain` | 2 | Installed | Pinned, checksum-verified kind, kubectl and Helm downloads. |
 | `kmx/portforward` | 1 | Installed | Owned loopback kubectl forwards with bind proof and process lifetime, shared by native Orka results and host tools. |
+| `kmx/policy` | 4 | Installed | Strict portable policy validation, deterministic digesting and Orka policy-resource rendering; authoring intent is not runtime authorization. |
 | `kmx/lift` | 2 | Installed | Cloud-independent lift rules and persisted ownership records. |
 | `kmx/config` | 1 | Installed | Native settings and state/cache path resolution. |
 | `kmx/cliui` | 2 | Installed | Destination-aware CLI presentation. |
@@ -227,12 +228,13 @@ endpoint evidence filtering. Neither file is embedded or installed for users;
 see [CI registry mirrors](development.md#ci-registry-mirrors) for the boundaries
 and pull-evidence contract.
 
-## `docs/` — 33 tracked files, native guides and design/history
+## `docs/` — 34 tracked files, native guides and design/history
 
-**Guides and index (14):** `README.md`, `getting-started.md`, `kmx.md`,
+**Guides and index (15):** `README.md`, `getting-started.md`, `kmx.md`,
 `aks.md`, `models.md`, `releases.md`, `FAQ.md`, `orka.md`,
 `copilot-inference.md`, `interactive-chat.md`, `interactive-lift.md`,
-`orka-k8s-tool.md`, `bundle-format.md` and `runtime-adapters.md`.
+`orka-k8s-tool.md`, `bundle-format.md`, `agentsuite-policy.md` and
+`runtime-adapters.md`.
 
 **Maintainer and process (19):** `development.md`, `repository-map.md`,
 `entry-point-principles.md`,

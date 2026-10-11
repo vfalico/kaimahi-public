@@ -7,6 +7,8 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/kaimahi-agents/kaimahi/internal/kmx/policy"
+
 	"github.com/spf13/cobra"
 	"oras.land/oras-go/v2/registry"
 
@@ -257,6 +259,34 @@ func newSuiteCommand(state *commandState) *cobra.Command {
 		}
 		return nil
 	}
-	group.AddCommand(build, pull, push, validate)
+	var policyNamespace string
+	policyRender := &cobra.Command{Use: "render-policy <policy.json> <binding.json>", Short: "Validate a portable policy contract and render Orka resources", Args: usageArgs(2, 2, "kmx suite render-policy <policy.json> <binding.json> --namespace <namespace>")}
+	policyRender.Flags().StringVar(&policyNamespace, "namespace", "", "target Orka namespace (required)")
+	_ = policyRender.MarkFlagRequired("namespace")
+	policyRender.RunE = func(cmd *cobra.Command, args []string) error {
+		policyData, err := os.ReadFile(args[0])
+		if err != nil {
+			return fmt.Errorf("read policy: %w", err)
+		}
+		bindingData, err := os.ReadFile(args[1])
+		if err != nil {
+			return fmt.Errorf("read binding: %w", err)
+		}
+		var p policy.Policy
+		if err := policy.StrictDecode(policyData, &p); err != nil {
+			return fmt.Errorf("decode policy: %w", err)
+		}
+		var b policy.Binding
+		if err := policy.StrictDecode(bindingData, &b); err != nil {
+			return fmt.Errorf("decode binding: %w", err)
+		}
+		out, err := policy.RenderOrka(policyNamespace, p, b)
+		if err != nil {
+			return err
+		}
+		_, err = cmd.OutOrStdout().Write(out)
+		return err
+	}
+	group.AddCommand(build, pull, push, validate, policyRender)
 	return group
 }
