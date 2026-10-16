@@ -52,6 +52,60 @@ func TestSuitePolicyCommandRejectsInvalidCapabilityContract(t *testing.T) {
 	}
 }
 
+func TestSuitePolicyCommandUsesSuiteV030CanonicalOrdering(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.json")
+	input := `{"version":"agentsuite.policy/v1","denyWritePaths":["/\ue000","/\ud800\udc00","/\ue000"],"requiredCapabilities":["filesystem/deny-write/v1"]}`
+	if err := os.WriteFile(path, []byte(input), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	command := newSuitePolicyCommand()
+	command.SetOut(&output)
+	command.SetArgs([]string{path})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	want := "{\"denyWritePaths\":[\"/𐀀\",\"/\ue000\"],\"requiredCapabilities\":[\"filesystem/deny-write/v1\"],\"version\":\"agentsuite.policy/v1\"}\n" +
+		"sha256:2051c088dcadf8c9df216d7cec3eb1e91630a0d4b265fefcf59b4a3d3f6e9c0f\n"
+	if output.String() != want {
+		t.Fatalf("output = %q, want %q", output.String(), want)
+	}
+}
+
+func TestSuitePolicyCommandRejectsNullAdministrativePolicy(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		input     string
+		wantError string
+	}{
+		{name: "document", input: `null`, wantError: "must be an object"},
+		{name: "paths", input: `{"denyWritePaths":null}`, wantError: "must not be null"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			policyPath := filepath.Join(directory, "policy.json")
+			adminPath := filepath.Join(directory, "admin.json")
+			if err := os.WriteFile(policyPath, []byte(`{"version":"agentsuite.policy/v1","denyWritePaths":["/workspace"],"requiredCapabilities":["filesystem/deny-write/v1"]}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(adminPath, []byte(test.input), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var output bytes.Buffer
+			command := newSuitePolicyCommand()
+			command.SilenceUsage = true
+			command.SetOut(&output)
+			command.SetArgs([]string{"--administrative-policy", adminPath, policyPath})
+			if err := command.Execute(); err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("error = %v, want null administrative policy refusal", err)
+			}
+			if output.Len() != 0 {
+				t.Fatalf("refusal emitted stdout: %q", output.String())
+			}
+		})
+	}
+}
+
 func TestSuitePolicyCommandSanitizesMalformedInputDiagnostics(t *testing.T) {
 	const valid = `{"version":"agentsuite.policy/v1","denyWritePaths":["/workspace"],"requiredCapabilities":["filesystem/deny-write/v1"]}`
 	const malformed = `{} "\u001b[2J\u0007\u009b31m"`
