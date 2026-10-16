@@ -40,6 +40,51 @@ func TestSuitePolicyCommandEmitsCanonicalPayloadAndDigest(t *testing.T) {
 	}
 }
 
+func TestSuitePolicyCommandPreservesUTF16CanonicalOrdering(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.json")
+	input := `{"version":"agentsuite.policy/v1","denyWritePaths":["/\uE000","/\uD800\uDC00","/workspace/source"],"requiredCapabilities":["filesystem/deny-write/v1"]}`
+	if err := os.WriteFile(path, []byte(input), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output, diagnostics bytes.Buffer
+	deps, loads := testDependencies(&output, &diagnostics)
+	if err := execute([]string{"suite", "policy", path}, deps); err != nil {
+		t.Fatal(err)
+	}
+	if *loads != 0 {
+		t.Fatalf("offline policy command loaded operational configuration %d times", *loads)
+	}
+	want := "{\"denyWritePaths\":[\"/workspace/source\",\"/𐀀\",\"/\uE000\"],\"requiredCapabilities\":[\"filesystem/deny-write/v1\"],\"version\":\"agentsuite.policy/v1\"}\n" +
+		"sha256:c06512cf93ae8e9275dc8196425734668f9682e1747dd6ec2d14012e18e80188\n"
+	if output.String() != want {
+		t.Fatalf("output = %q, want %q", output.String(), want)
+	}
+}
+
+func TestSuitePolicyCommandRejectsNullAdministrativePaths(t *testing.T) {
+	directory := t.TempDir()
+	policyPath := filepath.Join(directory, "policy.json")
+	adminPath := filepath.Join(directory, "admin.json")
+	if err := os.WriteFile(policyPath, []byte(`{"version":"agentsuite.policy/v1","denyWritePaths":["/workspace"],"requiredCapabilities":["filesystem/deny-write/v1"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(adminPath, []byte(`{"denyWritePaths":null}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output, diagnostics bytes.Buffer
+	deps, loads := testDependencies(&output, &diagnostics)
+	err := execute([]string{"suite", "policy", policyPath, "--administrative-policy", adminPath}, deps)
+	if *loads != 0 {
+		t.Fatalf("offline policy command loaded operational configuration %d times", *loads)
+	}
+	if err == nil {
+		t.Fatal("accepted null administrative denyWritePaths")
+	}
+	if output.Len() != 0 {
+		t.Fatalf("refusal emitted stdout: %q", output.String())
+	}
+}
+
 func TestSuitePolicyCommandRejectsInvalidCapabilityContract(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "policy.json")
 	if err := os.WriteFile(path, []byte(`{"version":"agentsuite.policy/v1","denyWritePaths":["/workspace"],"requiredCapabilities":[]}`), 0o600); err != nil {
