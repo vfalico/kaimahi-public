@@ -2,9 +2,10 @@ package app
 
 import (
 	"bytes"
-	"errors"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -25,59 +26,40 @@ func addWorkspacePolicy(t *testing.T, root string) {
 	writeFile(t, filepath.Join(root, "agents/greeter/policy.json"), appDenyAllPolicy)
 }
 
-func TestDeclaredPolicyRefusesEvaluationAndComposedLiftBeforeOutput(t *testing.T) {
-	t.Setenv("KMX_HOME", t.TempDir())
+func TestDeclaredPolicyPreparesEvaluationOffline(t *testing.T) {
+	t.Setenv("KMX_HOME", privateSuiteDir(t))
 	opt := nativeEvaluationOptions(t)
 	addWorkspacePolicy(t, opt.Workspace)
-	// An invalid output location would fail differently if output preflight ran.
-	opt.Out = filepath.Join(opt.Workspace, "forbidden.json")
 	p, err := PrepareSuiteWorkspaceEvaluation(t.Context(), opt)
-	if p != nil {
-		p.Close()
-		t.Fatal("declared policy evaluation prepared")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !errors.Is(err, workspace.ErrPolicyExecutionUnsupported) {
-		t.Fatalf("policy refusal lost: %v", err)
+	defer p.Close()
+	expected, err := resolveSuiteExecutionRequirement(p.suite)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var frozen suiteExecutionRequirement
+	if json.Unmarshal(p.executionRequirement, &frozen) != nil || !reflect.DeepEqual(frozen, *expected) {
+		t.Fatal("offline preparation lost exact Orka envelope")
 	}
 	if _, err := os.Stat(opt.Out); !os.IsNotExist(err) {
-		t.Fatal("refusal created output")
-	}
-	opt.Out = ""
-	lift, err := PrepareWorkspaceLift(t.Context(), WorkspaceLiftOptions{Workspace: opt.Workspace, Evaluation: opt, Destination: ReleaseLiftOptions{ToContext: "kind-test", ToNamespace: OrkaNamespace, Inference: "provider:inference"}, EvalName: "dev", DestinationName: "prod", Repository: "registry.example/agents", PlanOnly: true})
-	if lift != nil {
-		lift.Close()
-		t.Fatal("composed Lift prepared declared policy")
-	}
-	if !errors.Is(err, workspace.ErrPolicyExecutionUnsupported) {
-		t.Fatalf("composed policy refusal lost: %v", err)
+		t.Fatal("offline preparation exported passing output")
 	}
 }
-func TestDeclaredPolicyRefusesPrivateNativePreparationBeforeReads(t *testing.T) {
-	t.Setenv("KMX_HOME", t.TempDir())
-	opt := nativeEvaluationOptions(t)
-	addWorkspacePolicy(t, opt.Workspace)
-	p, err := workspace.Prepare(t.Context(), opt.Workspace, filepath.Join(t.TempDir(), "cache"))
-	if err != nil {
-		t.Fatal(err)
+func TestDeclaredPolicyNativeRequiresInstalledABI(t *testing.T) {
+	a, suite, reads := nativeFixture(t)
+	suite.Policy = &workspace.NativePolicy{Bytes: []byte(appDenyAllPolicy)}
+	// Historical installed v0.1.3 lacks the contractVersion field; refuse, never strip it.
+	if _, err := a.prepareSuiteNative(t.Context(), suite, OrkaNamespace, "inference"); err == nil || !strings.Contains(err.Error(), "contractVersion") {
+		t.Fatalf("unsupported installed ABI: %v", err)
 	}
-	suite, err := workspace.Load(t.Context(), p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	a, _, reads := nativeFixture(t)
-	before := reads.calls
-	if _, err := a.prepareSuiteNative(t.Context(), suite, OrkaNamespace, "inference"); !errors.Is(err, workspace.ErrPolicyExecutionUnsupported) {
-		t.Fatalf("private preparation ignored policy: %v", err)
-	}
-	if _, err := a.prepareSuiteNativeCandidate(t.Context(), suite, OrkaNamespace, "inference", strings.Repeat("a", 32)); !errors.Is(err, workspace.ErrPolicyExecutionUnsupported) {
-		t.Fatalf("candidate preparation ignored policy: %v", err)
-	}
-	if reads.calls != before {
-		t.Fatal("policy refusal reached cluster reads")
+	if reads.calls == 0 {
+		t.Fatal("installed schema was not read")
 	}
 }
 func TestDeclaredPolicyRefusesReceiptAndReleaseLiftBeforeReads(t *testing.T) {
-	t.Setenv("KMX_HOME", t.TempDir())
+	t.Setenv("KMX_HOME", privateSuiteDir(t))
 	root, prepared, suite, placement, observations := passingFixture(t)
 	receipt, err := newSuitePassingReceipt(t.Context(), prepared, placement, observations)
 	if err != nil {
@@ -100,14 +82,14 @@ func TestDeclaredPolicyRefusesReceiptAndReleaseLiftBeforeReads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := canonicalSuitePassingReceipt(t.Context(), receipt, declared); !errors.Is(err, workspace.ErrPolicyExecutionUnsupported) {
+	if _, err := canonicalSuitePassingReceipt(t.Context(), receipt, declared); err == nil {
 		t.Fatalf("receipt accepted policy: %v", err)
 	}
 	a, _, reads := nativeFixture(t)
 	before := reads.calls
 	_, err = a.PrepareReleaseLift(t.Context(), ReleaseLiftOptions{Reference: "suite@" + declared.Digest, FromLayout: candidate.Path, ToContext: "kind-test", ToNamespace: OrkaNamespace, Inference: "provider:inference", Evidence: evidence})
-	if !errors.Is(err, workspace.ErrPolicyExecutionUnsupported) {
-		t.Fatalf("Lift policy refusal lost: %v", err)
+	if err == nil {
+		t.Fatal("stale policy-free receipt authorized Lift")
 	}
 	if reads.calls != before {
 		t.Fatal("policy Lift reached target observations")
@@ -119,8 +101,8 @@ func TestDeclaredPolicyRefusesReceiptAndReleaseLiftBeforeReads(t *testing.T) {
 		} else {
 			_, err = a.PushSuiteWorkspaceEvaluated(t.Context(), root, "team:v1", layout, false, false, SuitePushProvenance{}, evidence)
 		}
-		if !errors.Is(err, workspace.ErrPolicyExecutionUnsupported) {
-			t.Fatalf("%s evaluated push policy refusal lost: %v", mode, err)
+		if err == nil {
+			t.Fatalf("%s stale passing proof accepted", mode)
 		}
 		if _, err := os.Stat(layout); !os.IsNotExist(err) {
 			t.Fatal("refused evaluated push transferred content")
@@ -128,7 +110,7 @@ func TestDeclaredPolicyRefusesReceiptAndReleaseLiftBeforeReads(t *testing.T) {
 	}
 }
 func TestDeclaredPolicyUnevaluatedPushPreservesGraph(t *testing.T) {
-	t.Setenv("KMX_HOME", t.TempDir())
+	t.Setenv("KMX_HOME", privateSuiteDir(t))
 	opt := nativeEvaluationOptions(t)
 	addWorkspacePolicy(t, opt.Workspace)
 	var out, diagnostics bytes.Buffer

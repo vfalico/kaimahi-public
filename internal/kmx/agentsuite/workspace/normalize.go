@@ -133,8 +133,8 @@ func normalizeSource(ctx context.Context, root string) (*normalizedSource, error
 			if m.Policy.Kind != yaml.ScalarNode || m.Policy.Tag != "!!str" || !fs.ValidPath(m.Policy.Value) || strings.Contains(m.Policy.Value, "\\") {
 				return nil, errors.New("policy path must be a nonempty member-relative string")
 			}
-			if profile, _ := m.Runtime.profile(); w.SchemaVersion != 3 && profile.ID != "orka" {
-				return nil, errors.New("policy authoring supports Orka members only")
+			if profile, _ := m.Runtime.profile(); w.SchemaVersion != 3 && profile.ID != "orka" && profile.ID != "kagent" && profile.ID != "agentsessions" {
+				return nil, errors.New("policy authoring requires a supported native member")
 			}
 			raw, err := read(path.Dir(memberPath) + "/" + m.Policy.Value)
 			if err != nil {

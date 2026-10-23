@@ -84,9 +84,12 @@ func suiteKagentRequestID(id, prefix string) bool {
 }
 func suiteKagentResponseHistory(raw []byte) bool {
 	var r struct {
-		Result struct{ History []json.RawMessage }
+		Result struct {
+			History []json.RawMessage
+			Task    struct{ History []json.RawMessage }
+		}
 	}
-	return json.Unmarshal(raw, &r) == nil && len(r.Result.History) > 0
+	return json.Unmarshal(raw, &r) == nil && (len(r.Result.History) > 0 || len(r.Result.Task.History) > 0)
 }
 func (s *suiteKagentBindingSnapshot) recheck() error {
 	raw, parent, file, err := readSuiteKagentBindings(s.path)
@@ -152,7 +155,7 @@ func (a *App) evaluateSuiteKagentWorkspace(ctx context.Context, p *PreparedSuite
 	if err != nil {
 		return err
 	}
-	op := &kagentEvaluationOperation{Requests: map[string]kagentEvaluationExecution{}, Tasks: map[string]bool{}, Contexts: map[string]bool{}, RequireHistory: true}
+	op := &kagentEvaluationOperation{ExecutionRequirement: append([]byte(nil), p.executionRequirement...), Requests: map[string]kagentEvaluationExecution{}, Tasks: map[string]bool{}, Contexts: map[string]bool{}, RequireHistory: true}
 	observations, err := evaluateSuiteRuns(ctx, p.inventory, p.options.CaseTimeout, a.Out, func(caseCtx context.Context, frame suitePassingInventoryCase) (suitePassingObservation, error) {
 		rpc, e := randomHex(16)
 		if e != nil {

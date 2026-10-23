@@ -25,6 +25,7 @@ func newAgentEvalCommand(state *commandState) *cobra.Command {
 		Long: "Evaluate every authored case in one packaged tool-free native Orka or exact v0.10.3 Go kagent workspace, discovered from the nearest ancestor workspace.yaml or selected exactly with --workspace.\n" +
 			"--to NAME resolves copied selectors from workspace-root kmx.yaml; explicit flags override. Without --to-context or --development-host, evalTarget may select a named destination. No remembered/current-context fallback.\n" +
 			"Orka requires --inference provider:NAME and result-access ServiceAccount/RBAC. Kagent requires author-owned --bindings FILE, binding namespace and unsecure auth; trusted-proxy and --result-port refuse. No runtime or model override, subset or content output. llmJudge requires an explicit --judge-base-url and authored judgeModel/judgeVersion; --judge-key-env names an optional HTTPS credential variable. Input, answer and rubric transfer to that provider for two independent samples per assertion; disagreement/error is unknown. No judge content is printed.\n" +
+			"Current native Codex requires --current-kagent-host FILE and --out FILE: an existing exact Agent/Model/Harness on literal loopback. Uses public Session and A2A APIs, deletes each Session, writes standalone observations only (no managed promotion or deployment attestation). No cluster selectors.\n" +
 			"Packaged AgentSessions requires --development-host FILE: an explicit private operator observation of a pinned built-in chat host on literal loopback, unauthenticated. It refuses all cluster/inference/bindings/result selectors and loads no cluster configuration. Authored llmJudge uses the same explicit judge transport options and transfers case inputs, attributed answers and rubrics.\n" +
 			"Development journals retain instructions, inputs, answers and per-exec config in cleartext under operator-managed retention. This is not authenticated remote promotion.\n" +
 			"Public Orka uses fresh digest/run-scoped candidates, never adoption/update/reuse, and exports passing evidence only after verified cleanup and final source/shared-input checks. Startup reports leftovers without deleting or blocking a fresh evaluation. Use eval cleanup [full-run-id] for explicit confirmed recovery; unanchored orphans refuse. Private Quickstart/console and other runtimes are unchanged.\n" +
@@ -53,14 +54,23 @@ func newAgentEvalCommand(state *commandState) *cobra.Command {
 			if state.contextFlag != "" || cmd.Flags().Changed("context") {
 				return fmt.Errorf("--context cannot be used with native eval; use --to-context")
 			}
-			if native.DevelopmentHost != "" {
+			if native.CurrentKagentHost != "" {
+				for _, name := range []string{"to", "to-context", "to-namespace", "inference", "bindings", "development-host", "result-port", "container-engine"} {
+					if cmd.Flags().Changed(name) {
+						return fmt.Errorf("--current-kagent-host refuses --%s", name)
+					}
+				}
+				if native.Out == "" {
+					return fmt.Errorf("--current-kagent-host requires --out")
+				}
+			} else if native.DevelopmentHost != "" {
 				for _, name := range []string{"to", "to-context", "to-namespace", "inference", "bindings", "result-port", "container-engine"} {
 					if cmd.Flag(name).Changed {
 						return fmt.Errorf("--development-host refuses --%s", name)
 					}
 				}
 			}
-			for _, name := range []string{"to", "workspace", "to-context", "to-namespace", "inference", "bindings", "development-host", "out", "result-port", "judge-base-url", "judge-key-env"} {
+			for _, name := range []string{"to", "workspace", "to-context", "to-namespace", "inference", "bindings", "development-host", "current-kagent-host", "out", "result-port", "judge-base-url", "judge-key-env"} {
 				if flag := cmd.Flag(name); flag.Changed && strings.TrimSpace(flag.Value.String()) == "" {
 					return fmt.Errorf("native eval requires non-empty --%s", name)
 				}
@@ -77,6 +87,9 @@ func newAgentEvalCommand(state *commandState) *cobra.Command {
 				return err
 			}
 			selectedNative := native
+			if selectedNative.CurrentKagentHost != "" {
+				selectedNative.ManagedPass = false
+			}
 			selectedNative.JSON = output == "json"
 			if !cmd.Flags().Changed("to-namespace") {
 				selectedNative.ToNamespace = ""
@@ -85,7 +98,7 @@ func newAgentEvalCommand(state *commandState) *cobra.Command {
 				selectedNative.ResultPort = ""
 			}
 			selection := destinationSelection{Context: selectedNative.ToContext, Namespace: selectedNative.ToNamespace, Inference: selectedNative.Inference, Bindings: selectedNative.Bindings}
-			if selectedNative.DevelopmentHost == "" {
+			if selectedNative.DevelopmentHost == "" && selectedNative.CurrentKagentHost == "" {
 				var root string
 				selection, root, err = resolveDestinationSelection(cmd, destination, selectedNative.Workspace, "", true, selection)
 				if err != nil {
@@ -103,7 +116,7 @@ func newAgentEvalCommand(state *commandState) *cobra.Command {
 				return err
 			}
 			defer func() { err = errors.Join(err, prepared.Close()) }()
-			if selectedNative.DevelopmentHost != "" {
+			if selectedNative.DevelopmentHost != "" || selectedNative.CurrentKagentHost != "" {
 				return (&app.App{Out: cmd.OutOrStdout(), Err: cmd.ErrOrStderr()}).EvaluateSuiteWorkspace(ctx, prepared)
 			}
 			selected := *state
@@ -133,6 +146,8 @@ func newAgentEvalCommand(state *commandState) *cobra.Command {
 	group.Flags().StringVar(&native.Inference, "inference", "", "existing inference Provider, as provider:NAME")
 	group.Flags().StringVar(&native.Bindings, "bindings", "", "author-owned KagentBindings file for the packaged kagent runtime")
 	_ = group.MarkFlagFilename("bindings")
+	group.Flags().StringVar(&native.CurrentKagentHost, "current-kagent-host", "", "private literal-loopback current native Codex public API selector; existing Agent; standalone observations only")
+	_ = group.MarkFlagFilename("current-kagent-host", "json")
 	group.Flags().StringVar(&native.DevelopmentHost, "development-host", "", "private JSON observation selecting a loopback unauthenticated AgentSessions development host")
 	_ = group.MarkFlagFilename("development-host", "json")
 	group.Flags().StringVar(&native.JudgeBaseURL, "judge-base-url", "", "explicit OpenAI-compatible judge endpoint; HTTPS except keyless literal loopback")

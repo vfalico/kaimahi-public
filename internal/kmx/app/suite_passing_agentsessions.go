@@ -67,9 +67,10 @@ type suiteSessionsObservation struct {
 
 func newSuiteSessionsSubject(suite *workspace.NativeSuite, host suiteSessionsHostObservation) (suiteSessionsSubject, error) {
 	var s suiteSessionsSubject
-	if suite == nil || suite.Runtime != (workspace.RuntimeProfile{ID: "agentsessions", Version: workspace.AgentSessionsVersion, Engine: "chat"}) || suite.RendererVersion != "kmx.native-agentsessions/v2" || suite.ExecutionProfile != "kmx.agentsessions-chat-system-prompt-tool-free-openai/v1" || suite.RequiredImages == nil || len(suite.RequiredImages) != 0 {
+	if suite == nil || suite.Runtime.ID != "agentsessions" || suite.RendererVersion != "kmx.native-agentsessions/v2" || suite.RequiredImages == nil || len(suite.RequiredImages) != 0 {
 		return s, errSuitePassingReceipt
 	}
+
 	config, err := agentsessions.ConfigDigest(string(suite.Instructions))
 	if err != nil {
 		return s, errSuitePassingReceipt
@@ -86,7 +87,9 @@ func validSuiteSessionsPassingProof(p *suiteSessionsPassingProof) bool {
 		return false
 	}
 	s, h := p.Subject, p.Subject.Host
-	if s.Profile != (workspace.RuntimeProfile{ID: "agentsessions", Version: workspace.AgentSessionsVersion, Engine: "chat"}) || s.Renderer != "kmx.native-agentsessions/v2" || s.ExecutionProfile != "kmx.agentsessions-chat-system-prompt-tool-free-openai/v1" || h.Mode != "operator-observed-development" || h.RuntimeVersion != workspace.AgentSessionsVersion || h.Harness != "chat" || h.HarnessVersion != "1" || h.Retention != "operator-managed" || h.Model != s.Model {
+	legacy := s.Profile == (workspace.RuntimeProfile{ID: "agentsessions", Version: workspace.AgentSessionsVersion, Engine: "chat"}) && s.ExecutionProfile == "kmx.agentsessions-chat-system-prompt-tool-free-openai/v1"
+	native := s.Profile == (workspace.RuntimeProfile{ID: "agentsessions", Version: workspace.AgentSessionsToolchatVersion, Engine: "toolchat"}) && s.ExecutionProfile == workspace.AgentSessionsToolchatExecutionProfile
+	if !(legacy || native) || s.Renderer != "kmx.native-agentsessions/v2" || h.Mode != "operator-observed-development" || h.RuntimeVersion != s.Profile.Version || h.Harness != s.Profile.Engine || h.HarnessVersion != "1" || h.Retention != "operator-managed" || h.Model != s.Model {
 		return false
 	}
 	for _, d := range []string{s.SuiteDigest, s.GraphDigest, s.MemberDigest, s.InstructionsDigest, s.CompositionDigest, s.BuildProfileDigest, s.ConfigDigest, h.RuntimeBinaryDigest, h.RuntimeConfigDigest, h.InferenceRevision} {
@@ -114,7 +117,7 @@ func coherentSuiteSessionsPassingProof(p *suiteSessionsPassingProof, suite *work
 }
 
 func validSuiteSessionsExecution(e *suiteSessionsCaseExecution) bool {
-	return e != nil && verificationIdentity(e.SessionUID) && verificationIdentity(e.ExecutionID) && e.Harness == "chat" && e.HarnessVersion == "1" && e.HeadSeq == 5 && verificationDigest(e.HeadHash)
+	return e != nil && verificationIdentity(e.SessionUID) && verificationIdentity(e.ExecutionID) && (e.Harness == "chat" && e.HeadSeq == 5 || e.Harness == "toolchat" && e.HeadSeq >= 5 && e.HeadSeq <= 256) && e.HarnessVersion == "1" && verificationDigest(e.HeadHash)
 }
 
 // Only fresh successful candidate results can enter this factory. Replay and
@@ -145,7 +148,7 @@ func newSuiteSessionsPassingReceipt(ctx context.Context, p *PreparedSuiteWorkspa
 	r := &suitePassingReceipt{SchemaVersion: 1, Domain: suiteSessionsPassingDomain, ExecutionMode: "native-agentsessions", SourceFingerprint: p.prepared.Fingerprint, Sessions: proof, CasesDigest: casesDigest, Result: "pass", Cases: make([]suitePassingCase, 0, len(inventory))}
 	for i, o := range observations {
 		result := o.Result
-		if result.ExecutionFailed || result.ModelMixed || result.Model != subject.Model || result.ConfigDigest != subject.ConfigDigest || result.Harness != subject.Host.Harness || result.HarnessVersion != subject.Host.HarnessVersion || result.Output == "" || len(result.ToolCalls) != 0 {
+		if result.ExecutionFailed || result.ModelMixed || result.Model != subject.Model || result.ConfigDigest != subject.ConfigDigest || result.Harness != subject.Host.Harness || result.HarnessVersion != subject.Host.HarnessVersion || result.Output == "" || subject.Profile.Engine == "toolchat" && !result.ToolEvidenceComplete || subject.Profile.Engine == "chat" && len(result.ToolCalls) != 0 {
 			return nil, errSuitePassingReceipt
 		}
 		row := inventory[i].Metadata

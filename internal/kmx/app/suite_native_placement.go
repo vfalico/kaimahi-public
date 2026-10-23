@@ -11,6 +11,7 @@ import (
 
 // Success-only current observation, not a transaction or a lineage receipt.
 type suiteNativePlacement struct {
+	requirement     []byte
 	Subject         suiteNativeSubject
 	Provider, Agent suiteNativeOwnedResource
 }
@@ -78,6 +79,9 @@ func (a *App) placeSuiteNativeMode(ctx context.Context, p *suiteNativePrepared, 
 		}
 	}
 	placement := &suiteNativePlacement{Subject: p.Subject}
+	if p.Subject.ExecutionIdentity != "" {
+		return nil, fmt.Errorf("governed placement requires candidate source authority")
+	}
 	resources := []*suiteNativeOwnedResource{&placement.Provider, &placement.Agent}
 	for i, doc := range []map[string]any{p.bundle.Provider, p.bundle.Agent} {
 		if err := a.verifySuiteNativeInputs(ctx, p.Subject); err != nil {

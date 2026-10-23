@@ -162,3 +162,60 @@ func TestSuiteSessionsPassingClosedWire(t *testing.T) {
 		})
 	}
 }
+
+func TestNativeToolchatReceiptProfileBinding(t *testing.T) {
+	p, s, o := sessionsPassingFixture(t)
+	p.suite.Runtime = workspace.RuntimeProfile{ID: "agentsessions", Version: workspace.AgentSessionsToolchatVersion, Engine: "toolchat"}
+	p.suite.ExecutionProfile = workspace.AgentSessionsToolchatExecutionProfile
+	host := s.Host
+	host.Harness = "toolchat"
+	host.RuntimeVersion = workspace.AgentSessionsToolchatVersion
+	subject, err := newSuiteSessionsSubject(p.suite, host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range o {
+		o[i].Result.Harness = "toolchat"
+		o[i].Result.Head.Seq = 9
+		o[i].Result.ToolCalls = map[string]int{"http_get": 1}
+		o[i].Result.ToolEvidenceComplete = true
+	}
+	receipt, err := newSuiteSessionsPassingReceipt(t.Context(), p, subject, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"host-profile", "execution-profile", "head", "evidence"} {
+		t.Run(mode, func(t *testing.T) {
+			switch mode {
+			case "host-profile":
+				copy := *receipt
+				copy.Sessions = &suiteSessionsPassingProof{Subject: subject, RequiredImages: []string{}}
+				copy.Sessions.Subject.Host.Harness = "chat"
+				if basicSuitePassingReceipt(&copy) == nil {
+					t.Fatal("mixed host accepted")
+				}
+			case "execution-profile":
+				copy := *receipt
+				copy.Cases = append([]suitePassingCase(nil), receipt.Cases...)
+				e := *copy.Cases[0].SessionsExecution
+				e.Harness = "chat"
+				e.HeadSeq = 5
+				copy.Cases[0].SessionsExecution = &e
+				if basicSuitePassingReceipt(&copy) == nil {
+					t.Fatal("mixed execution accepted")
+				}
+			case "head":
+				e := *receipt.Cases[0].SessionsExecution
+				e.HeadSeq = 257
+				if validSuiteSessionsExecution(&e) {
+					t.Fatal("unbounded head")
+				}
+			case "evidence":
+				o[0].Result.ToolEvidenceComplete = false
+				if _, err := newSuiteSessionsPassingReceipt(t.Context(), p, subject, o); err == nil {
+					t.Fatal("incomplete tools accepted")
+				}
+			}
+		})
+	}
+}

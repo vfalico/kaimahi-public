@@ -20,9 +20,9 @@ import (
 // SuiteWorkspaceEvaluationOptions selects a full native workspace invocation.
 // Runtime, model and assertions remain packaged; judge transport is explicit.
 type SuiteWorkspaceEvaluationOptions struct {
-	Workspace, ToContext, ToNamespace, Inference, Bindings, Out, ResultPort, DevelopmentHost string
-	CaseTimeout                                                                              time.Duration
-	JudgeBaseURL, JudgeKeyEnv                                                                string
+	Workspace, ToContext, ToNamespace, Inference, Bindings, Out, ResultPort, DevelopmentHost, CurrentKagentHost string
+	CaseTimeout                                                                                                 time.Duration
+	JudgeBaseURL, JudgeKeyEnv                                                                                   string
 	// ExpectedRuntime is a destination declaration, never a runtime override.
 	ExpectedRuntime string
 	// ManagedPass is public root eval's private completed-proof registration.
@@ -35,23 +35,25 @@ type SuiteWorkspaceEvaluationOptions struct {
 // PreparedSuiteWorkspaceEvaluation owns its offline source snapshot and anchored
 // exclusive export destination. Its contents are not a public mutable plan.
 type PreparedSuiteWorkspaceEvaluation struct {
-	prepared       *workspace.Prepared
-	suite          *workspace.NativeSuite
-	inventory      []suitePassingInventoryCase
-	output         *suitePassingExport
-	root           string
-	options        SuiteWorkspaceEvaluationOptions
-	started        bool
-	bindings       *suiteKagentBindingSnapshot
-	sessions       *suiteSessionsHostSnapshot
-	judge          agentruntime.EvaluationJudge
-	store          *suitePassStore
-	completed      []byte
-	record         string
-	candidateRun   string
-	runs           suiteRunSummary
-	cleanup        string
-	publicMetadata *suitePublicMetadata
+	prepared             *workspace.Prepared
+	suite                *workspace.NativeSuite
+	inventory            []suitePassingInventoryCase
+	output               *suitePassingExport
+	root                 string
+	options              SuiteWorkspaceEvaluationOptions
+	started              bool
+	bindings             *suiteKagentBindingSnapshot
+	current              *suiteCurrentSnapshot
+	sessions             *suiteSessionsHostSnapshot
+	judge                agentruntime.EvaluationJudge
+	store                *suitePassStore
+	completed            []byte
+	record               string
+	candidateRun         string
+	runs                 suiteRunSummary
+	cleanup              string
+	publicMetadata       *suitePublicMetadata
+	executionRequirement []byte // frozen whole-policy opaque compute input
 }
 
 func (p *PreparedSuiteWorkspaceEvaluation) Close() error {
@@ -89,7 +91,11 @@ func PrepareSuiteWorkspaceEvaluation(ctx context.Context, opt SuiteWorkspaceEval
 	if (opt.Out == "" && !opt.ManagedPass) || opt.CaseTimeout <= 0 || opt.CaseTimeout > 9*time.Minute {
 		return nil, errors.New("native evaluation requires private output and bounded case timeout")
 	}
-	if opt.DevelopmentHost != "" {
+	if opt.CurrentKagentHost != "" {
+		if opt.DevelopmentHost != "" || opt.ManagedPass || opt.Out == "" || opt.ToContext != "" || opt.ToNamespace != "" || opt.Inference != "" || opt.Bindings != "" || opt.ResultPort != "" || opt.JSON {
+			return nil, errors.New("current kagent host requires explicit standalone output and refuses cluster, managed, JSON and other runtime selectors")
+		}
+	} else if opt.DevelopmentHost != "" {
 		if opt.ToContext != "" || opt.ToNamespace != "" || opt.Inference != "" || opt.Bindings != "" || opt.ResultPort != "" {
 			return nil, errors.New("development host evaluation refuses cluster, inference, bindings and result selectors")
 		}
@@ -124,11 +130,31 @@ func PrepareSuiteWorkspaceEvaluation(ctx context.Context, opt SuiteWorkspaceEval
 	if err != nil {
 		return nil, suiteEvaluationError(ctx, err, false)
 	}
+
+	// Offline current-fork packaging is not legacy Go runtime qualification.
+	// Refuse before binding reads, reservation, Kubernetes discovery or sends.
+	if suite.Runtime.ID == "kagent" && suite.Runtime.Engine == "codex" && opt.CurrentKagentHost == "" {
+		return nil, errors.New("current-fork native Codex supports offline packaging only; public runtime placement and attribution are not qualified")
+	}
+	var requirement []byte
+	if suite.Policy != nil {
+		requirement, err = resolveSuiteRuntimeRequirement(suite)
+		if err != nil {
+			return nil, suiteEvaluationError(ctx, err, false)
+		}
+	}
 	if opt.JSON && suite.Runtime.ID != "orka" {
 		return nil, errors.New("native eval JSON output supports only Orka")
 	}
 	if opt.ExpectedRuntime != "" && opt.ExpectedRuntime != suite.Runtime.ID {
 		return nil, errors.New("destination runtime declaration does not match packaged runtime")
+	}
+	var current *suiteCurrentSnapshot
+	if opt.CurrentKagentHost != "" {
+		current, err = snapshotSuiteCurrentHost(opt.CurrentKagentHost, suite)
+		if err != nil {
+			return nil, err
+		}
 	}
 	var sessions *suiteSessionsHostSnapshot
 	if suite.Runtime.ID == "agentsessions" {
@@ -143,7 +169,9 @@ func PrepareSuiteWorkspaceEvaluation(ctx context.Context, opt SuiteWorkspaceEval
 		return nil, errors.New("development host requires the packaged agentsessions runtime")
 	}
 	var bindings *suiteKagentBindingSnapshot
-	if suite.Runtime.ID == "agentsessions" {
+	if current != nil {
+		// Existing current native Agent uses only its explicit public API.
+	} else if suite.Runtime.ID == "agentsessions" {
 		// The host is already explicitly snapshotted; no Kubernetes defaults apply.
 	} else if suite.Runtime.ID == "kagent" {
 		if opt.Bindings == "" || opt.ResultPort != "" {
@@ -179,7 +207,7 @@ func PrepareSuiteWorkspaceEvaluation(ctx context.Context, opt SuiteWorkspaceEval
 	if err != nil {
 		return nil, err
 	}
-	p := &PreparedSuiteWorkspaceEvaluation{prepared: prepared, suite: suite, inventory: inventory, root: root, options: opt, bindings: bindings, sessions: sessions, judge: judge, runs: suiteRunSummary{Total: len(inventory), SuiteRunExecutionSummary: SuiteRunExecutionSummary{NotExecuted: len(inventory)}}, cleanup: "candidate cleanup not required"}
+	p := &PreparedSuiteWorkspaceEvaluation{executionRequirement: append([]byte(nil), requirement...), prepared: prepared, suite: suite, inventory: inventory, root: root, options: opt, current: current, bindings: bindings, sessions: sessions, judge: judge, runs: suiteRunSummary{Total: len(inventory), SuiteRunExecutionSummary: SuiteRunExecutionSummary{NotExecuted: len(inventory)}}, cleanup: "candidate cleanup not required"}
 	if opt.ManagedPass {
 		p.store, err = openSuitePassStore(ctx, root, cache, suite.Digest)
 		if err == nil {
@@ -282,6 +310,9 @@ func (a *App) evaluateSuiteWorkspaceWithProof(ctx context.Context, p *PreparedSu
 }
 
 func (a *App) evaluateSuiteWorkspaceSelected(ctx context.Context, p *PreparedSuiteWorkspaceEvaluation) error {
+	if p != nil && p.current != nil {
+		return a.evaluateSuiteCurrentWorkspace(ctx, p)
+	}
 	if p != nil && p.suite != nil && p.suite.Runtime.ID == "agentsessions" {
 		return a.evaluateSuiteSessionsWorkspace(ctx, p)
 	}

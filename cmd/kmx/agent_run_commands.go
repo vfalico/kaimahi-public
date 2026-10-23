@@ -20,6 +20,7 @@ func newAgentRunCommand(state *commandState) *cobra.Command {
 			"the answer may not yet be readable. Use kmx task result to retrieve it later.",
 		Args: usageArgs(0, 0, "kmx run --agent <name> --prompt <text>"),
 	}
+	cmd.Flags().StringVar(&opt.PolicyWorkspace, "policy-workspace", "", "freeze ordinary authored Suite network-v2 policy from this workspace; requires built-in Codex harness-v2 Agent")
 	cmd.Flags().StringVar(&opt.Agent, "agent", "", "run this live Orka Agent (required)")
 	cmd.Flags().StringVar(&opt.Namespace, "namespace", "", "live Agent namespace (default: "+app.OrkaNamespace+")")
 	cmd.Flags().StringVar(&opt.Prompt, "prompt", "", "one-shot Task prompt")

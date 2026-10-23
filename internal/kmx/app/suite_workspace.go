@@ -99,6 +99,9 @@ func (a *App) CreateSuiteMember(ctx context.Context, root string, opt workspace.
 
 func nativeSuiteLabel(profile workspace.RuntimeProfile) string {
 	if profile.ID == "kagent" {
+		if profile.Engine == "codex" {
+			return "native-kagent a0ad6cb Codex (explicit loopback public API only)"
+		}
 		return "native-kagent v0.10.3 Go"
 	}
 	if profile.ID == "agentsessions" {
@@ -258,8 +261,10 @@ func (a *App) pushSuiteWorkspaceSelected(ctx context.Context, root, reference, l
 		if err := suite.RequireUnprofiled(); err != nil {
 			return oras.PushResult{}, err
 		}
-		if err := suite.RequirePolicyFree(); err != nil {
-			return oras.PushResult{}, err
+		if suite.Policy != nil {
+			if _, err := resolveSuiteRuntimeRequirement(suite); err != nil {
+				return oras.PushResult{}, err
+			}
 		}
 	}
 	var evidencePath string

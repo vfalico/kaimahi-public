@@ -1,6 +1,9 @@
 package app
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 
 	"strings"
@@ -81,4 +84,42 @@ func evaluationSends(t *testing.T, dir string) []kagentCall {
 		}
 	}
 	return sends
+}
+
+func TestKagentEvaluationOpaquePublicCarrier(t *testing.T) {
+	original := []byte(` {"large":9007199254740993,"opaque":["a","b"]} `)
+	for _, requirement := range [][]byte{nil, original, []byte("bad"), bytes.Repeat([]byte(" "), (1<<20)+1)} {
+		raw, err := kagentEvaluationRequestBody("input", kagentEvaluationExecution{RPCID: "rpc-1", RequestMessageID: "message-1"}, requirement)
+		valid := len(requirement) == 0 || bytes.Equal(requirement, original)
+		if (err == nil) != valid {
+			t.Fatal("invalid carrier accepted", err)
+		}
+		if !valid {
+			continue
+		}
+		var request struct {
+			Params struct {
+				Metadata map[string]string `json:"metadata"`
+				Message  struct {
+					Metadata map[string]any `json:"metadata"`
+				} `json:"message"`
+			} `json:"params"`
+		}
+		if err = json.Unmarshal(raw, &request); err != nil {
+			t.Fatal(err)
+		}
+		if request.Params.Message.Metadata != nil {
+			t.Fatal("carrier nested under caller message")
+		}
+		if len(requirement) == 0 {
+			if request.Params.Metadata != nil {
+				t.Fatal("default authority added")
+			}
+			continue
+		}
+		got, err := base64.StdEncoding.DecodeString(request.Params.Metadata["kagent.dev/execution-requirement/v1"])
+		if err != nil || !bytes.Equal(got, requirement) {
+			t.Fatal("opaque bytes changed", err)
+		}
+	}
 }

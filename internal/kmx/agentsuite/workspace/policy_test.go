@@ -203,8 +203,24 @@ func TestWorkspacePolicyRefusesInvalidSource(t *testing.T) {
 		root, cache := createWorkspace(t)
 		setMemberRuntime(t, root, runtime)
 		declarePolicy(t, root, "greeter", networkPolicy(""))
-		if _, err := workspace.Prepare(t.Context(), root, cache); err == nil {
-			t.Fatal("non-Orka declaration accepted")
+		prepared, err := workspace.Prepare(t.Context(), root, cache)
+		if err != nil {
+			t.Fatal("native policy authoring refused", err)
+		}
+		loaded, err := workspace.Load(t.Context(), prepared)
+		if err != nil || loaded.Policy == nil || !bytes.Equal(loaded.Policy.Bytes, []byte(networkPolicy(""))) {
+			t.Fatal("native policy lost", err)
+		}
+		if loaded.RequirePolicyFree() != workspace.ErrPolicyExecutionUnsupported {
+			t.Fatal("offline authoring bypassed execution admission")
+		}
+		artifact, err := suiteoras.ReadArtifactLayout(t.Context(), prepared.Path, prepared.Descriptor.Digest.String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		roundtrip, err := workspace.LoadArtifact(t.Context(), artifact)
+		if err != nil || roundtrip.Policy == nil || !reflect.DeepEqual(roundtrip.Policy, loaded.Policy) {
+			t.Fatal("native policy artifact roundtrip failed", err)
 		}
 	}
 }

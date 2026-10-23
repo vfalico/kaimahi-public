@@ -81,8 +81,10 @@ type suitePassingInventoryCase struct {
 // projection budget reserves maximum accepted Task identities before selection.
 func suitePassingInventory(suite *workspace.NativeSuite) ([]suitePassingInventoryCase, string, error) {
 	if suite != nil {
-		if err := suite.RequirePolicyFree(); err != nil {
-			return nil, "", err
+		if suite.Policy != nil {
+			if _, err := resolveSuiteRuntimeRequirement(suite); err != nil {
+				return nil, "", err
+			}
 		}
 	}
 	if suite == nil || len(suite.Cases) == 0 {
@@ -113,7 +115,8 @@ func suitePassingInventory(suite *workspace.NativeSuite) ([]suitePassingInventor
 		runs, minPasses := c.RunPolicy()
 		metadata := suitePassingCase{ID: c.ID, Path: file.Path, CaseDigest: agentruntime.EvaluationCaseDigest(file.Bytes), InputDigest: agentruntime.EvaluationInputDigest(c.Input), Verdict: "pass", Assertions: []suitePassingAssertion{}}
 		for _, a := range agentruntime.EvaluationCaseAssertions(c) {
-			if a.Type != "contains" && a.Type != "notContains" && a.Type != "regex" && (a.Type != "llmJudge" || (suite.Runtime.ID != "orka" && suite.Runtime.ID != "kagent" && suite.Runtime.ID != "agentsessions")) {
+			nativeTool := suite.Runtime.ID == "agentsessions" && suite.Runtime.Engine == "toolchat" && suite.ExecutionProfile == workspace.AgentSessionsToolchatExecutionProfile && (a.Type == "toolCalled" || a.Type == "toolNotCalled") && a.Tool == "http_get"
+			if !nativeTool && a.Type != "contains" && a.Type != "notContains" && a.Type != "regex" && (a.Type != "llmJudge" || (suite.Runtime.ID != "orka" && suite.Runtime.ID != "kagent" && suite.Runtime.ID != "agentsessions")) {
 				return nil, "", errors.New("unsupported native suite evaluator")
 			}
 			metadata.Assertions = append(metadata.Assertions, suitePassingAssertionDefinition(a))
@@ -129,7 +132,7 @@ func suitePassingInventory(suite *workspace.NativeSuite) ([]suitePassingInventor
 		}
 		if suite.Runtime.ID == "agentsessions" {
 			projected.TaskName, projected.TaskUID = "", ""
-			projected.SessionsExecution = &suiteSessionsCaseExecution{SessionUID: strings.Repeat("x", 256), ExecutionID: strings.Repeat("x", 256), Harness: "chat", HarnessVersion: "1", HeadHash: strings.Repeat("0", 64), HeadSeq: 5}
+			projected.SessionsExecution = &suiteSessionsCaseExecution{SessionUID: strings.Repeat("x", 256), ExecutionID: strings.Repeat("x", 256), Harness: suite.Runtime.Engine, HarnessVersion: "1", HeadHash: strings.Repeat("0", 64), HeadSeq: 256}
 		}
 		wire, err := agentsuite.Marshal(projected)
 		if err != nil {
@@ -336,7 +339,7 @@ func basicSuitePassingReceipt(r *suitePassingReceipt) error {
 			tasks[e.TaskID], uids[e.ContextID], tasks[e.RPCID], uids[e.RequestMessageID] = true, true, true, true
 		} else {
 			e := c.SessionsExecution
-			if c.KagentExecution != nil || c.TaskName != "" || c.TaskUID != "" || !validSuiteSessionsExecution(e) || tasks[e.ExecutionID] || uids[e.SessionUID] {
+			if c.KagentExecution != nil || c.TaskName != "" || c.TaskUID != "" || !validSuiteSessionsExecution(e) || e.Harness != r.Sessions.Subject.Host.Harness || tasks[e.ExecutionID] || uids[e.SessionUID] {
 				return errSuitePassingReceipt
 			}
 			tasks[e.ExecutionID], uids[e.SessionUID] = true, true
@@ -344,7 +347,8 @@ func basicSuitePassingReceipt(r *suitePassingReceipt) error {
 		assertions := map[string]bool{}
 		verdict := "pass"
 		for _, a := range c.Assertions {
-			if !evaluationEvidenceID.MatchString(a.ID) || !verificationIdentity(a.ID) || assertions[a.ID] || (a.Type != "contains" && a.Type != "notContains" && a.Type != "regex" && a.Type != "llmJudge") || !verificationDigest(a.DefinitionDigest) || a.EvaluatorVersion != suiteAssertionEvaluatorVersion(a.Type) || (a.Verdict != "pass" && (c.Run == 0 || a.Verdict != "fail")) || !agentruntime.EvaluationJudgeEvidenceValid(agentruntime.EvaluationAssertionResult{Type: a.Type, Verdict: agentruntime.EvaluationVerdict(a.Verdict), Judge: a.Judge}) {
+			nativeTool := r.ExecutionMode == "native-agentsessions" && r.Sessions.Subject.Profile.Engine == "toolchat" && (a.Type == "toolCalled" || a.Type == "toolNotCalled")
+			if !evaluationEvidenceID.MatchString(a.ID) || !verificationIdentity(a.ID) || assertions[a.ID] || (!nativeTool && a.Type != "contains" && a.Type != "notContains" && a.Type != "regex" && a.Type != "llmJudge") || !verificationDigest(a.DefinitionDigest) || a.EvaluatorVersion != suiteAssertionEvaluatorVersion(a.Type) || (a.Verdict != "pass" && (c.Run == 0 || a.Verdict != "fail")) || !agentruntime.EvaluationJudgeEvidenceValid(agentruntime.EvaluationAssertionResult{Type: a.Type, Verdict: agentruntime.EvaluationVerdict(a.Verdict), Judge: a.Judge}) {
 				return errSuitePassingReceipt
 			}
 			assertions[a.ID] = true
@@ -449,7 +453,7 @@ func validSuitePassingSubject(s suiteNativeSubject) bool {
 }
 
 func coherentSuitePassingSubject(s suiteNativeSubject, suite *workspace.NativeSuite) error {
-	if !s.validPhysicalMember() || !suiteNativeOrkaInput(suite) || s.Suite != suite.Name || s.SuiteDigest != suite.Digest || s.GraphDigest != suite.GraphDigest || s.Member != suite.MemberID || s.MemberDigest != suite.MemberDigest || s.InstructionsDigest != suite.InstructionsDigest || s.CompositionDigest != suite.CompositionDigest || s.BuildProfileDigest != suite.BuildProfileDigest || s.Model != suite.Model || s.Renderer != suite.RendererVersion || !reflect.DeepEqual(s.RequiredImages, suite.RequiredImages) {
+	if (s.ExecutionIdentity != "" && !suitePrefixedDigest(s.ExecutionIdentity)) || !s.validPhysicalMember() || !suiteNativeOrkaInput(suite) || s.Suite != suite.Name || s.SuiteDigest != suite.Digest || s.GraphDigest != suite.GraphDigest || s.Member != suite.MemberID || s.MemberDigest != suite.MemberDigest || s.InstructionsDigest != suite.InstructionsDigest || s.CompositionDigest != suite.CompositionDigest || s.BuildProfileDigest != suite.BuildProfileDigest || s.Model != suite.Model || s.Renderer != suite.RendererVersion || !reflect.DeepEqual(s.RequiredImages, suite.RequiredImages) {
 		return errSuitePassingReceipt
 	}
 	binding, err := suiteNativeDigest("kmx.native-orka.binding/v1", struct {
@@ -464,6 +468,17 @@ func coherentSuitePassingSubject(s suiteNativeSubject, suite *workspace.NativeSu
 	p := s.Binding.Provider
 	bundle, err := scaffold.GenerateOrka(scaffold.OrkaSpec{Name: s.physicalMember(), Namespace: s.Target.Namespace, Description: suite.Description, Model: suite.Model, Instructions: string(suite.Instructions), ProviderType: p.Type, BaseURL: p.BaseURL, SecretName: p.SecretName, SecretKey: p.SecretKey})
 	if err != nil {
+		return errSuitePassingReceipt
+	}
+	requirement, err := prepareGovernedSuiteOrka(suite, bundle)
+	if err != nil {
+		return errSuitePassingReceipt
+	}
+	identity := ""
+	if requirement != nil {
+		identity = requirement.Identity
+	}
+	if s.ExecutionIdentity != identity {
 		return errSuitePassingReceipt
 	}
 	rendered, err := orkaRenderedDocuments(bundle)

@@ -14,7 +14,7 @@ import (
 	"github.com/kaimahi-agents/kaimahi/internal/kmx/scaffold"
 )
 
-// TaskResult inspects a previously submitted AI Task. Non-follow inspection
+// TaskResult inspects a previously submitted AI or native Agent Task. Non-follow inspection
 // never opens a result session for a Task without a readable terminal answer.
 func (a *App) TaskResult(opt TaskResultOptions) error {
 	if a.Cfg == nil || a.Run == nil || a.Out == nil || a.Err == nil {
@@ -80,8 +80,8 @@ func (a *App) TaskResult(opt TaskResultOptions) error {
 	if json.Unmarshal(raw, &object) != nil || object.Kind != "Task" || object.Metadata.Name != opt.Task || object.Metadata.Namespace != namespace || object.Metadata.UID == "" || object.Metadata.Generation < 1 || object.Metadata.DeletionTimestamp != nil {
 		return fmt.Errorf("Task %s/%s has invalid or terminating identity", namespace, opt.Task)
 	}
-	if object.Spec.Type != "ai" {
-		return fmt.Errorf("Task %s/%s is not an AI Task (spec.type != ai)", namespace, opt.Task)
+	if object.Spec.Type != "ai" && object.Spec.Type != "agent" {
+		return fmt.Errorf("Task %s/%s is not an AI Task or native Agent Task (spec.type must be ai or agent)", namespace, opt.Task)
 	}
 	id := orkaIdentity{Kind: "Task", Name: opt.Task, UID: object.Metadata.UID, Generation: object.Metadata.Generation}
 	// Re-read with the pinned identity rather than trusting an old phase

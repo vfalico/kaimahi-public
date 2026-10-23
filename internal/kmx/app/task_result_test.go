@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -241,5 +242,36 @@ func TestTaskResultNoWaitUsesOnlyOnePhaseRead(t *testing.T) {
 	err := f.app.TaskResult(opt)
 	if !errors.Is(err, ErrTaskPending) {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+// Native policy-bearing run submits spec.type=agent; the printed recovery
+// command must read that SAME Task without creating or replacing it.
+func TestTaskResultAcceptsNativeAgentTask(t *testing.T) {
+	for _, follow := range []bool{false, true} {
+		t.Run(fmt.Sprint(follow), func(t *testing.T) {
+			f, opt := taskResultFixture(t)
+			path := filepath.Join(f.dir, "task-"+opt.Task+".json")
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw = bytes.Replace(raw, []byte(`"type":"ai"`), []byte(`"type":"agent"`), 1)
+			if err = os.WriteFile(path, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if follow {
+				opt.Wait = time.Minute
+			}
+			if err = f.app.TaskResult(opt); err != nil {
+				t.Fatal(err)
+			}
+			if f.out.String() != "retrieved answer\n" {
+				t.Fatalf("stdout=%q", f.out)
+			}
+			if f.taskCreates(t) != 1 {
+				t.Fatal("recovery created a replacement Task")
+			}
+		})
 	}
 }

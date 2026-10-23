@@ -70,6 +70,9 @@ func suiteEvaluationError(ctx context.Context, err error, mayHaveChanged bool) e
 			}
 		}
 	}
+	if errors.Is(err, workspace.ErrPolicyExecutionUnsupported) {
+		return errors.Join(workspace.ErrPolicyExecutionUnsupported, cause)
+	}
 	if errors.Is(err, workspace.ErrMultiMemberUnsupported) {
 		return errors.Join(workspace.ErrMultiMemberUnsupported, cause)
 	}
@@ -173,6 +176,19 @@ func (a *App) evaluateSuiteNativeTracked(ctx context.Context, placement *suiteNa
 		"metadata": map[string]any{"name": name, "namespace": ns},
 		"spec":     map[string]any{"type": "ai", "prompt": frame.Case.Input, "agentRef": map[string]any{"name": subject.physicalMember(), "namespace": ns}, "resources": map[string]any{}},
 	}
+	if subject.ExecutionIdentity != "" {
+		var requirement suiteExecutionRequirement
+		if len(placement.requirement) == 0 || json.Unmarshal(placement.requirement, &requirement) != nil || requirement.Identity != subject.ExecutionIdentity {
+			return observation, errSuiteNativeEvaluation
+		}
+		var exact map[string]any
+		if json.Unmarshal(placement.requirement, &exact) != nil {
+			return observation, errSuiteNativeEvaluation
+		}
+		task["spec"].(map[string]any)["type"] = "agent"
+		task["spec"].(map[string]any)["execution"] = map[string]any{"requirement": exact}
+	}
+
 	if run != nil {
 		addOrkaMarker(task, suiteNativeOwner(subject).markers())
 	}

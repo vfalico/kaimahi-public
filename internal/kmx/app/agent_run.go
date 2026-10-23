@@ -25,6 +25,7 @@ const (
 var ErrTaskPending = errors.New("Task result pending")
 
 type RunAgentOptions struct {
+	PolicyWorkspace                                  string
 	Agent, Namespace, Prompt, PromptFile, ResultPort string
 	Wait                                             time.Duration
 }
@@ -142,6 +143,14 @@ func (a *App) RunAgent(opt RunAgentOptions) error {
 		}
 	}
 	ctx := a.operationContext()
+	var requirement *suiteExecutionRequirement
+	if opt.PolicyWorkspace != "" {
+		var err error
+		requirement, err = loadSuiteExecutionRequirement(ctx, opt.PolicyWorkspace)
+		if err != nil {
+			return err
+		}
+	}
 	worker := *a
 	worker.guarded = false
 	namespace := opt.Namespace
@@ -158,6 +167,11 @@ func (a *App) RunAgent(opt RunAgentOptions) error {
 	raw, err := worker.orkaCapture(ctx, nil, "-n", namespace, "get", orkaPlural("Agent"), name, "--ignore-not-found=true", "-o", "json")
 	if err != nil {
 		return fmt.Errorf("cannot read Agent %s/%s at destination: %w", namespace, name, err)
+	}
+	if requirement != nil {
+		if err := qualifySuiteACPAgent(raw); err != nil {
+			return err
+		}
 	}
 	live := describeRunAgent(raw)
 	switch {
@@ -236,6 +250,11 @@ func (a *App) RunAgent(opt RunAgentOptions) error {
 	if err != nil {
 		return fmt.Errorf("cannot recheck Agent %s/%s: %w", namespace, name, err)
 	}
+	if requirement != nil {
+		if err := qualifySuiteACPAgent(latestRaw); err != nil {
+			return err
+		}
+	}
 	latest := describeRunAgent(latestRaw)
 	if !latest.Found || latest.UID != live.UID || latest.Generation != live.Generation {
 		return fmt.Errorf("Agent %s/%s was replaced or changed before Task creation", namespace, name)
@@ -262,6 +281,11 @@ func (a *App) RunAgent(opt RunAgentOptions) error {
 		return fmt.Errorf("Recovery command could not be written; no Task created: %w", err)
 	}
 	task := map[string]any{"apiVersion": "core.orka.ai/v1alpha1", "kind": "Task", "metadata": map[string]any{"name": taskName, "namespace": namespace}, "spec": map[string]any{"type": "ai", "prompt": prompt, "agentRef": map[string]any{"name": name, "namespace": namespace}, "resources": map[string]any{}}}
+	if requirement != nil {
+		spec := task["spec"].(map[string]any)
+		spec["type"] = "agent"
+		spec["execution"] = map[string]any{"requirement": requirement}
+	}
 	id, err := worker.createOrkaObject(execCtx, namespace, task)
 	if err != nil {
 		return fmt.Errorf("Task %s creation failed or was ambiguous; it may exist or be running, do not retry; recover with %s: %w", taskName, worker.taskRecovery(taskName, worker.Cfg.KubeContext, namespace), err)

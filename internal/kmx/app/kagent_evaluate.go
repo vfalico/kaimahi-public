@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -15,9 +16,10 @@ type kagentEvaluationObservation struct {
 }
 
 type kagentEvaluationOperation struct {
-	Requests        map[string]kagentEvaluationExecution
-	Tasks, Contexts map[string]bool
-	RequireHistory  bool
+	ExecutionRequirement []byte
+	Requests             map[string]kagentEvaluationExecution
+	Tasks, Contexts      map[string]bool
+	RequireHistory       bool
 }
 
 func kagentUnknownEvaluation(ctx context.Context, c agentruntime.EvaluationCase, execution kagentEvaluationExecution, judge agentruntime.EvaluationJudge) agentruntime.EvaluationReceipt {
@@ -30,7 +32,7 @@ func (a *App) executeKagentEvaluationCase(ctx context.Context, ref agentruntime.
 	if err != nil {
 		return agentruntime.EvaluationReceipt{}, "", err
 	}
-	body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": execution.RPCID, "method": "message/send", "params": map[string]any{"message": map[string]any{"kind": "message", "role": "user", "messageId": execution.RequestMessageID, "parts": []any{map[string]any{"kind": "text", "text": c.Input}}}, "configuration": map[string]any{"blocking": true}}})
+	body, err := kagentEvaluationRequestBody(c.Input, execution, op.ExecutionRequirement, a.selectedKagentProfile().A2AV1)
 	if err != nil {
 		return agentruntime.EvaluationReceipt{}, "", fmt.Errorf("Kagent evaluation request unavailable")
 	}
@@ -39,7 +41,11 @@ func (a *App) executeKagentEvaluationCase(ctx context.Context, ref agentruntime.
 	if remaining <= 0 {
 		return agentruntime.EvaluationReceipt{}, "", fmt.Errorf("Kagent evaluation deadline exhausted before send")
 	}
-	path := kagentServiceProxyPath(observed.Service, "/api/a2a/"+url.PathEscape(ref.Namespace)+"/"+url.PathEscape(ref.Name))
+	prefix := "/api/a2a/"
+	if a.selectedKagentProfile().A2AV1 {
+		prefix = "/agents/"
+	}
+	path := kagentServiceProxyPath(observed.Service, prefix+url.PathEscape(ref.Namespace)+"/"+url.PathEscape(ref.Name))
 	raw, sendErr := a.kagentCaptureWithTimeout(ctx, remaining, remaining.String(), body, "create", "--raw", path, "-f", "-")
 	answer := ""
 	var parseErr error
@@ -79,4 +85,27 @@ func (a *App) executeKagentEvaluationCase(ctx context.Context, ref agentruntime.
 		result.Stop = true
 	}
 	return result, answer, nil
+}
+
+// Requirement is carried once at the public request level, never under message
+// metadata or an Agent template. Padded base64 preserves the exact opaque bytes.
+func kagentEvaluationRequestBody(input string, execution kagentEvaluationExecution, requirement []byte, v1 ...bool) ([]byte, error) {
+	params := map[string]any{"message": map[string]any{"role": "ROLE_USER", "messageId": execution.RequestMessageID, "parts": []any{map[string]any{"text": input}}}, "configuration": map[string]any{"returnImmediately": false}}
+	if len(requirement) != 0 {
+		if len(requirement) > 1<<20 || !json.Valid(requirement) {
+			return nil, fmt.Errorf("invalid opaque execution requirement")
+		}
+		params["metadata"] = map[string]any{"kagent.dev/execution-requirement/v1": base64.StdEncoding.EncodeToString(requirement)}
+	}
+	method := "message/send"
+	if len(v1) > 0 && v1[0] {
+		method = "SendMessage"
+	} else {
+		message := params["message"].(map[string]any)
+		message["kind"] = "message"
+		message["role"] = "user"
+		message["parts"] = []any{map[string]any{"kind": "text", "text": input}}
+		params["configuration"] = map[string]any{"blocking": true}
+	}
+	return json.Marshal(map[string]any{"jsonrpc": "2.0", "id": execution.RPCID, "method": method, "params": params})
 }

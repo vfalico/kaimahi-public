@@ -135,7 +135,9 @@ func (a *App) suiteCandidateCleanupRootIdentity(ctx context.Context, target suit
 	if r.Kind == "Task" {
 		spec, _ := doc["spec"].(map[string]any)
 		ref, _ := spec["agentRef"].(map[string]any)
-		if spec["type"] != "ai" || ref["name"] != physical || ref["namespace"] != target.Namespace {
+		// Exact UID/generation/spec digest above commits the originally admitted Task.
+		// Governed candidates use the native agent ABI rather than legacy AI.
+		if (spec["type"] != "ai" && spec["type"] != "agent") || ref["name"] != physical || ref["namespace"] != target.Namespace {
 			return nil, false, false, errSuiteCandidateCleanup
 		}
 	}

@@ -156,7 +156,7 @@ func (a *App) evaluateSuiteSessionsWorkspace(ctx context.Context, p *PreparedSui
 		if err := recheck(runCtx); err != nil {
 			return observed, err
 		}
-		result, err := client.RunSuiteCase(runCtx, agentsessions.SuiteCaseRequest{SuiteDigest: p.suite.Digest, Member: p.suite.MemberID, CaseDigest: frame.Metadata.CaseDigest, Instructions: string(p.suite.Instructions), Model: p.suite.Model, Input: frame.Case.Input, UsedSessionUIDs: sessions})
+		result, err := client.RunSuiteCase(runCtx, agentsessions.SuiteCaseRequest{Harness: p.suite.Runtime.Engine, ExecutionRequirement: append([]byte(nil), p.executionRequirement...), SuiteDigest: p.suite.Digest, Member: p.suite.MemberID, CaseDigest: frame.Metadata.CaseDigest, Instructions: string(p.suite.Instructions), Model: p.suite.Model, Input: frame.Case.Input, UsedSessionUIDs: sessions})
 		if err != nil {
 			return observed, err
 		}
@@ -167,7 +167,7 @@ func (a *App) evaluateSuiteSessionsWorkspace(ctx context.Context, p *PreparedSui
 			return observed, errSuitePassingReceipt
 		}
 		sessions[result.SessionUID], executions[result.ExecutionID] = true, true
-		evidence := agentruntime.EvaluationEvidence{AnswerAvailable: true, Answer: result.Output}
+		evidence := agentruntime.EvaluationEvidence{AnswerAvailable: true, Answer: result.Output, ToolSupported: p.suite.Runtime.Engine == "toolchat", ToolEvidenceComplete: result.ToolEvidenceComplete, ToolCalls: result.ToolCalls}
 		rows := agentruntime.EvaluateAssertions(frame.Case, evidence)
 		if p.judge != nil {
 			rows = p.judge(runCtx, frame.Case, evidence)

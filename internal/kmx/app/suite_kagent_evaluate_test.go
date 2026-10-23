@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"os"
@@ -330,4 +331,53 @@ func TestSuiteKagentEvaluationOfflineBindingSelection(t *testing.T) {
 			t.Fatalf("placeholder classification lost: %v", err)
 		}
 	})
+}
+
+// Public Suite evaluation with a fake command transport: proves authored policy
+// reaches message/send byte-exactly, not successful kernel enforcement.
+func TestSuiteKagentPolicyPublicCarrier(t *testing.T) {
+	a, _, _, dir := suiteKagentFixture(t, "")
+	opt := suiteKagentEvaluationOptions(t)
+	member := filepath.Join(opt.Workspace, "agents/sample/member.yaml")
+	raw, err := os.ReadFile(member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, member, string(raw)+"policy: policy.json\n")
+	writeFile(t, filepath.Join(opt.Workspace, "agents/sample/policy.json"), `{"version":"agentsuite.policy/v2","requiredCapabilities":["network/egress-allow/v1"],"network":{"egressAllow":[]}}`)
+	p, err := PrepareSuiteWorkspaceEvaluation(t.Context(), opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	expected := append([]byte(nil), p.executionRequirement...)
+	if len(expected) == 0 {
+		t.Fatal("authority missing")
+	}
+	t.Setenv("KMX_KAGENT_TEST_SCENARIO", "eval-success")
+	if err = a.EvaluateSuiteWorkspace(t.Context(), p); err != nil {
+		t.Fatal(err)
+	}
+	sends := evaluationSends(t, dir)
+	if len(sends) != 2 {
+		t.Fatal("inventory incomplete")
+	}
+	for _, send := range sends {
+		params, ok := send.Body["params"].(map[string]any)
+		if !ok {
+			t.Fatal("params missing")
+		}
+		metadata, ok := params["metadata"].(map[string]any)
+		if !ok {
+			t.Fatal("opaque requirement missing")
+		}
+		encoded, ok := metadata["kagent.dev/execution-requirement/v1"].(string)
+		if !ok {
+			t.Fatal("carrier missing")
+		}
+		actual, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil || !bytes.Equal(actual, expected) {
+			t.Fatal("whole-policy bytes changed", err)
+		}
+	}
 }

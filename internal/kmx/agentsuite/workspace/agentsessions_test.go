@@ -161,3 +161,46 @@ func TestAgentSessionsSourceRequiresExactChatPin(t *testing.T) {
 		})
 	}
 }
+
+func TestNativeToolchatProfilePinnedPolicyAndTransfer(t *testing.T) {
+	for _, mode := range []string{"exact", "missing-policy", "legacy-pin", "legacy-engine", "floating"} {
+		t.Run(mode, func(t *testing.T) {
+			root, cache := createWorkspace(t)
+			version, engine := workspace.AgentSessionsToolchatVersion, "toolchat"
+			switch mode {
+			case "legacy-pin":
+				version = workspace.AgentSessionsVersion
+			case "legacy-engine":
+				engine = "chat"
+			case "floating":
+				version = "main"
+			}
+			setMemberRuntime(t, root, "runtime: {id: agentsessions, version: "+version+", engine: "+engine+"}\n")
+			if mode != "missing-policy" {
+				declarePolicy(t, root, "greeter", networkPolicy(policyEndpointA))
+			}
+			p, err := workspace.Prepare(t.Context(), root, cache)
+			if mode != "exact" {
+				if err == nil {
+					t.Fatal("incomplete native contract accepted", mode)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := workspace.Load(t.Context(), p)
+			if err != nil || loaded.Runtime.Engine != "toolchat" || loaded.ExecutionProfile != workspace.AgentSessionsToolchatExecutionProfile || loaded.Policy == nil {
+				t.Fatal(loaded, err)
+			}
+			artifact, err := suiteoras.ReadArtifactLayout(t.Context(), p.Path, p.Descriptor.Digest.String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			copy, err := workspace.LoadArtifact(t.Context(), artifact)
+			if err != nil || !reflect.DeepEqual(loaded, copy) {
+				t.Fatal("offline profile drift", err)
+			}
+		})
+	}
+}

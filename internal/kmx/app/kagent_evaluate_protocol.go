@@ -25,7 +25,16 @@ func parseKagentEvaluationResponse(raw []byte, request kagentEvaluationExecution
 	if _, present := root["error"]; present {
 		return unavailable()
 	}
-	task, ok := kagentEvaluationObject(root["result"], "kind", "id", "contextId", "status", "artifacts", "history", "metadata")
+	resultRaw := root["result"]
+	var union map[string]json.RawMessage
+	if json.Unmarshal(resultRaw, &union) == nil && union["task"] != nil {
+		normalized, err := normalizeKagentV1Task(resultRaw)
+		if err != nil {
+			return unavailable()
+		}
+		resultRaw = normalized
+	}
+	task, ok := kagentEvaluationObject(resultRaw, "kind", "id", "contextId", "status", "artifacts", "history", "metadata")
 	if !ok || kagentEvaluationString(task["kind"]) != "task" {
 		return unavailable()
 	}
@@ -178,4 +187,116 @@ func kagentEvaluationParts(raw json.RawMessage) (string, bool, bool) {
 		}
 	}
 	return strings.Join(texts, "\n"), len(texts) > 0, true
+}
+
+// The current fork speaks A2A v1. Normalize only a strictly validated v1
+// Task union into the internal legacy representation so the same identity,
+// history, duplicate-key and exact-text checks govern both formats. This is
+// not a lossy SDK re-marshal: unknown fields and ambiguous parts are refused.
+func normalizeKagentV1Task(raw json.RawMessage) (json.RawMessage, error) {
+	bad := func() (json.RawMessage, error) { return nil, fmt.Errorf("Kagent v1 response unavailable") }
+	union, ok := kagentEvaluationObject(raw, "task")
+	if !ok || len(union) != 1 {
+		return bad()
+	}
+	task, ok := kagentEvaluationObject(union["task"], "id", "contextId", "status", "artifacts", "history", "metadata")
+	if !ok {
+		return bad()
+	}
+	status, ok := kagentEvaluationObject(task["status"], "state", "timestamp", "message")
+	if !ok {
+		return bad()
+	}
+	states := map[string]string{"TASK_STATE_COMPLETED": "completed", "TASK_STATE_FAILED": "failed", "TASK_STATE_CANCELED": "canceled", "TASK_STATE_REJECTED": "rejected", "TASK_STATE_SUBMITTED": "submitted", "TASK_STATE_WORKING": "working", "TASK_STATE_INPUT_REQUIRED": "input-required", "TASK_STATE_AUTH_REQUIRED": "auth-required"}
+	state, ok := states[kagentEvaluationString(status["state"])]
+	if !ok {
+		return bad()
+	}
+	status["state"], _ = json.Marshal(state)
+	if msg, present := status["message"]; present {
+		v, e := normalizeKagentV1Message(msg)
+		if e != nil {
+			return bad()
+		}
+		status["message"] = v
+	}
+	task["status"], _ = json.Marshal(status)
+	task["kind"] = json.RawMessage(`"task"`)
+	if history, present := task["history"]; present {
+		var messages []json.RawMessage
+		if json.Unmarshal(history, &messages) != nil || messages == nil {
+			return bad()
+		}
+		for i, msg := range messages {
+			v, e := normalizeKagentV1Message(msg)
+			if e != nil {
+				return bad()
+			}
+			messages[i] = v
+		}
+		task["history"], _ = json.Marshal(messages)
+	}
+	if artifacts, present := task["artifacts"]; present {
+		var list []json.RawMessage
+		if json.Unmarshal(artifacts, &list) != nil || list == nil {
+			return bad()
+		}
+		for i, raw := range list {
+			artifact, ok := kagentEvaluationObject(raw, "artifactId", "name", "description", "parts", "metadata", "extensions")
+			if !ok {
+				return bad()
+			}
+			parts, e := normalizeKagentV1Parts(artifact["parts"])
+			if e != nil {
+				return bad()
+			}
+			artifact["parts"] = parts
+			list[i], _ = json.Marshal(artifact)
+		}
+		task["artifacts"], _ = json.Marshal(list)
+	}
+	return json.Marshal(task)
+}
+func normalizeKagentV1Message(raw json.RawMessage) (json.RawMessage, error) {
+	msg, ok := kagentEvaluationObject(raw, "role", "messageId", "taskId", "contextId", "parts", "metadata", "extensions", "referenceTaskIds")
+	if !ok {
+		return nil, fmt.Errorf("invalid v1 message")
+	}
+	roles := map[string]string{"ROLE_USER": "user", "ROLE_AGENT": "agent"}
+	role, ok := roles[kagentEvaluationString(msg["role"])]
+	if !ok {
+		return nil, fmt.Errorf("invalid v1 role")
+	}
+	msg["role"], _ = json.Marshal(role)
+	msg["kind"] = json.RawMessage(`"message"`)
+	parts, err := normalizeKagentV1Parts(msg["parts"])
+	if err != nil {
+		return nil, err
+	}
+	msg["parts"] = parts
+	return json.Marshal(msg)
+}
+func normalizeKagentV1Parts(raw json.RawMessage) (json.RawMessage, error) {
+	var parts []json.RawMessage
+	if json.Unmarshal(raw, &parts) != nil || len(parts) == 0 {
+		return nil, fmt.Errorf("invalid v1 parts")
+	}
+	for i, raw := range parts {
+		part, ok := kagentEvaluationObject(raw, "text", "data", "metadata")
+		if !ok {
+			return nil, fmt.Errorf("invalid v1 part")
+		}
+		_, text := part["text"]
+		_, data := part["data"]
+		if text == data {
+			return nil, fmt.Errorf("ambiguous v1 part")
+		}
+		if text {
+			part["kind"] = json.RawMessage(`"text"`)
+		} else {
+			part["kind"] = json.RawMessage(`"data"`)
+		}
+		parts[i], _ = json.Marshal(part)
+	}
+	return json.Marshal(parts)
 }

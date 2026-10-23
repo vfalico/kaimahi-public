@@ -16,6 +16,7 @@ type kagentProfile struct {
 	ControllerConfigDigests, GoConfigDigests [2]string
 	AgentSchema, ModelSchema, RemoteSchema   string
 	StrictPlatform                           bool
+	A2AV1                                    bool // Explicit current-fork qualification seam; not a new public version profile.
 }
 
 func kagentLiftProfile() kagentProfile {

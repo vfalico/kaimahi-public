@@ -63,7 +63,7 @@ func readMemberPolicy(files map[string][]byte, agent agentsuite.Agent, profile R
 	if agent.Policy == nil {
 		return nil, nil
 	}
-	if profile.ID != "orka" {
+	if profile.ID != "orka" && profile.ID != "kagent" && profile.ID != "agentsessions" {
 		return nil, errors.New("unsupported native member policy binding")
 	}
 	return readDeclaredMemberPolicy(files, agent)

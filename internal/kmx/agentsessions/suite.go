@@ -24,6 +24,13 @@ const (
 // is sha256-prefixed; CaseDigest is raw lowercase SHA-256. These and the member
 // label correlate the Session; they are not server-enforced ownership.
 type SuiteCaseRequest struct {
+	// ExecutionRequirement carries the frozen complete runtime envelope. It is
+	// stored on Session, never interpreted or reconstructed by this adapter.
+	// Admission by the selected public Suite profile remains caller-owned.
+	ExecutionRequirement []byte
+	// Harness is an explicit closed profile selection. Empty preserves chat.
+	Harness string
+
 	SuiteDigest, Member, CaseDigest, Instructions, Model, Input string
 	// UsedSessionUIDs is caller-owned and read-only during invocation. A reused
 	// created UID refuses before Exec. Nil is normal for the first case.
@@ -57,24 +64,28 @@ func chatConfig(instructions string) ([]byte, error) {
 // RunSuiteCase executes one fresh Session for one packaged chat case. The caller
 // owns host qualification, ordered coverage and cross-case Session uniqueness.
 func (c *Client) RunSuiteCase(ctx context.Context, request SuiteCaseRequest) (CaseResult, error) {
+	if len(request.ExecutionRequirement) > 1<<20 {
+		return CaseResult{}, status.Error(codes.InvalidArgument, "agentsessions: execution requirement exceeds bounds")
+	}
 	if !strings.HasPrefix(request.SuiteDigest, "sha256:") || !verifyDigest(strings.TrimPrefix(request.SuiteDigest, "sha256:")) || !verifyDigest(request.CaseDigest) || !safeIdentity(request.Member) {
 		return CaseResult{}, status.Error(codes.InvalidArgument, "agentsessions: valid suite case identity required")
 	}
-	return c.runCase(ctx, CaseRequest{Instructions: request.Instructions, Model: request.Model, Input: request.Input}, map[string]string{
+	return c.runCase(ctx, CaseRequest{Instructions: request.Instructions, Model: request.Model, Input: request.Input, Harness: request.Harness}, map[string]string{
 		"kmx.suite-digest": request.SuiteDigest,
 		"kmx.member":       request.Member,
 		"kmx.case-digest":  request.CaseDigest,
-	}, true, request.UsedSessionUIDs)
+	}, true, request.UsedSessionUIDs, request.ExecutionRequirement)
 }
 
 // Only this pinned, single-model text chat shape can supply suite proof. The
 // legacy runner intentionally keeps its broader event/output compatibility.
-func suiteRecordShape(record *v1.LogRecord) bool {
+func suiteRecordShape(record *v1.LogRecord) bool { return suiteRecordShapeAt(record, 0) }
+func suiteRecordShapeAt(record *v1.LogRecord, offset int64) bool {
 	event := record.GetEvent()
 	if event.GetSchemaVersion() < 0 || event.GetSchemaVersion() > 1 {
 		return false
 	}
-	switch record.GetSeq() {
+	switch record.GetSeq() - offset {
 	case 1:
 		start := event.GetExecutionStart()
 		return event.Kind == v1.EventKind_EVENT_EXECUTION_START && start.GetHarness() == "chat" && start.GetHarnessVersion() == suiteHarnessVersion

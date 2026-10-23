@@ -27,7 +27,29 @@ const agentsessionsRendererVersion = "kmx.native-agentsessions/v2"
 
 // This contract binds deterministic system_prompt config and exact separately
 // observed model identity. The public build profile is inert for plain chat.
+// The toolchat profile explicitly binds the native built-in http_get tool; it
+// is not an MCP provider or a claim that the inert build profile contains it.
+const AgentSessionsToolchatExecutionProfile = "kmx.agentsessions-toolchat-native-http-get-openai-responses/v1"
+
+func sessionsExecutionProfile(p RuntimeProfile) string {
+	if p == (RuntimeProfile{ID: "agentsessions", Version: AgentSessionsToolchatVersion, Engine: "toolchat"}) {
+		return AgentSessionsToolchatExecutionProfile
+	}
+	return agentsessionsExecutionProfile
+}
+
 const agentsessionsExecutionProfile = "kmx.agentsessions-chat-system-prompt-tool-free-openai/v1"
+
+// Current-fork native Codex is not the legacy Go tool-free profile. Offline
+// packaging is supported; online execution still requires separate qualification.
+const KagentCodexExecutionProfile = "kmx.kagent-a0ad6cb-codex-openai-responses-native-shell/v1"
+
+func kagentProfileID(p RuntimeProfile) string {
+	if p == (RuntimeProfile{ID: "kagent", Version: KagentCodexVersion, Engine: "codex"}) {
+		return KagentCodexExecutionProfile
+	}
+	return kagentExecutionProfile
+}
 
 // This immutable ID names the exact v0.10.3 Go contract qualified by
 // app.kagentLiftProfile, scaffold.GenerateKagent's v1alpha2 declarative renderer,
@@ -116,9 +138,9 @@ func loadSource(ctx context.Context, root string) (*snapshot, error) {
 		}
 		renderer = rendererVersion
 		if profile.ID == "kagent" {
-			renderer, executionProfile, declaredRuntime = kagentRendererVersion, kagentExecutionProfile, &profile
+			renderer, executionProfile, declaredRuntime = kagentRendererVersion, kagentProfileID(profile), &profile
 		} else if profile.ID == "agentsessions" {
-			renderer, executionProfile, declaredRuntime = agentsessionsRendererVersion, agentsessionsExecutionProfile, &profile
+			renderer, executionProfile, declaredRuntime = agentsessionsRendererVersion, sessionsExecutionProfile(profile), &profile
 		}
 	}
 	if err != nil {
@@ -223,11 +245,11 @@ func resolve(name string, m sourceMember, instructions, profile []byte, cases []
 	if runtimeProfile.ID == "kagent" {
 		metadataPath = kagentNativePath
 		record.ExecutionMode, record.RendererVersion = "native-kagent", kagentRendererVersion
-		record.Runtime, record.ExecutionProfile = &runtimeProfile, kagentExecutionProfile
+		record.Runtime, record.ExecutionProfile = &runtimeProfile, kagentProfileID(runtimeProfile)
 	} else if runtimeProfile.ID == "agentsessions" {
 		metadataPath = agentsessionsNativePath
 		record.ExecutionMode, record.RendererVersion = "native-agentsessions", agentsessionsRendererVersion
-		record.Runtime, record.ExecutionProfile = &runtimeProfile, agentsessionsExecutionProfile
+		record.Runtime, record.ExecutionProfile = &runtimeProfile, sessionsExecutionProfile(runtimeProfile)
 	}
 	_, _, err = put(metadataPath, record)
 	return files, err
@@ -235,6 +257,9 @@ func resolve(name string, m sourceMember, instructions, profile []byte, cases []
 
 // resolveMemberGraph is shared by legacy and profiled packaging; content is authored once.
 func resolveMemberGraph(m sourceMember, instructions []byte, cases []runtime.EvaluationCase) (map[string][]byte, agentsuite.ManifestRef, agentsuite.ManifestRef, error) {
+	if p, err := m.Runtime.profile(); err == nil && (p.Engine == "toolchat" || p.Engine == "codex") && len(m.policyBytes) == 0 {
+		return nil, agentsuite.ManifestRef{}, agentsuite.ManifestRef{}, errors.New("native toolchat/codex requires explicit complete policy")
+	}
 	files := map[string][]byte{"instructions/" + m.ID + ".md": instructions}
 	put := func(name string, value any) (string, int64, error) {
 		b, err := agentsuite.Marshal(value)
@@ -329,12 +354,12 @@ func nativeProfile(files map[string][]byte) (nativeRecord, RuntimeProfile, error
 		return record, RuntimeProfile{}, errors.New("unsupported native metadata or required images")
 	}
 	if kagent {
-		if record.Runtime == nil || *record.Runtime != (RuntimeProfile{ID: "kagent", Version: "v0.10.3", Engine: "go"}) || record.ExecutionProfile != kagentExecutionProfile {
+		if record.Runtime == nil || record.Runtime.ID != "kagent" || record.Runtime.validate() != nil || record.ExecutionProfile != kagentProfileID(*record.Runtime) {
 			return record, RuntimeProfile{}, errors.New("unsupported kagent execution profile")
 		}
 		profile = *record.Runtime
 	} else if sessions {
-		if record.Runtime == nil || *record.Runtime != (RuntimeProfile{ID: "agentsessions", Version: AgentSessionsVersion, Engine: "chat"}) || record.ExecutionProfile != agentsessionsExecutionProfile {
+		if record.Runtime == nil || record.Runtime.ID != "agentsessions" || record.Runtime.validate() != nil || record.ExecutionProfile != sessionsExecutionProfile(*record.Runtime) {
 			return record, RuntimeProfile{}, errors.New("unsupported agentsessions execution profile")
 		}
 		profile = *record.Runtime

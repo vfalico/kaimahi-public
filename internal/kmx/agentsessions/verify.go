@@ -62,7 +62,7 @@ func (c *Client) VerifyCase(ctx context.Context, request VerifyRequest) (VerifyR
 		result.Detail = "agentsessions: verification context ended"
 		return result, safeRPCError(err, result.Detail)
 	}
-	if request.Harness != "chat" {
+	if request.Harness != "chat" && request.Harness != "toolchat" {
 		result.Status = "unsupported"
 		result.Detail = "agentsessions: reference harness unavailable"
 		return result, nil
@@ -78,6 +78,14 @@ func (c *Client) VerifyCase(ctx context.Context, request VerifyRequest) (VerifyR
 		result.Status = "mismatch"
 		result.Detail = "agentsessions: receipt prefix head mismatch"
 		return result, nil
+	}
+	if len(records) > 0 && (ownedEvent(eventlog.RecordToProto(records[0]).GetEvent()) || preparedEvent(eventlog.RecordToProto(records[0]).GetEvent())) && records[0].Event.Lifecycle.ComputeID != request.SessionUID {
+		result.Status = "mismatch"
+		result.Detail = "agentsessions: original ownership session mismatch"
+		return result, nil
+	}
+	if request.Harness == "toolchat" {
+		return referenceToolchatProof(ctx, records, request.Model, request.AnswerSHA256)
 	}
 	if !referenceChatInvocation(records) {
 		result.Status = "unsupported"
@@ -161,7 +169,11 @@ func (c *Client) replayVerifiedJournal(ctx context.Context, uid string, toSeq in
 // referenceChatProof uses only isolated records and the pinned harness. No
 // provider endpoint/client, tool executor, live store or live fence is available.
 func referenceChatProof(ctx context.Context, records []eventlog.Record, model, answerDigest string) (VerifyResult, error) {
-	result := VerifyResult{Status: "unknown", Records: len(records), ConfigSHA256: verifySHA256(records[0].Event.ExecutionStart.Config)}
+	invocation, ok := invocationRecords(records)
+	if !ok || !referenceChatInvocation(records) {
+		return VerifyResult{Status: "unsupported", Records: len(records)}, nil
+	}
+	result := VerifyResult{Status: "unknown", Records: len(records), ConfigSHA256: verifySHA256(invocation[0].Event.ExecutionStart.Config)}
 	evidence := func(state, detail string) (VerifyResult, error) {
 		result.Status = state
 		result.Detail = detail
@@ -171,10 +183,10 @@ func referenceChatProof(ctx context.Context, records []eventlog.Record, model, a
 		result.Detail = detail
 		return result, status.Error(code, detail)
 	}
-	if records[2].Event.ModelCall.Model != model {
+	if invocation[2].Event.ModelCall.Model != model {
 		return evidence("mismatch", "agentsessions: recorded model mismatch")
 	}
-	recorded, err := boundedReferenceText(records[3].Event.Message)
+	recorded, err := boundedReferenceText(invocation[3].Event.Message)
 	if err != nil {
 		return fail(codes.ResourceExhausted, "agentsessions: committed answer exceeds 1 MiB")
 	}
@@ -188,7 +200,11 @@ func referenceChatProof(ctx context.Context, records []eventlog.Record, model, a
 	if err != nil {
 		return fail(codes.Internal, "agentsessions: reference reconstruction unavailable")
 	}
-	outputs, err := replay.Replay(ctx, chatagent.Harness{Model: model})
+	var reference api.Harness = chatagent.Harness{Model: model}
+	if invocation[2].Event.ModelCall.Native {
+		reference = nativeReferenceChat{Harness: reference}
+	}
+	outputs, err := replay.Replay(ctx, reference)
 	result.ModelCalls = calls + replay.ModelInvocations()
 	if ctx.Err() != nil {
 		result.Detail = "agentsessions: verification context ended"
@@ -229,6 +245,11 @@ func boundedReferenceText(message *api.Message) (string, error) {
 // closes controller Replay's intentional skipping of unfinished turns and its
 // legacy markerless defaults without reimplementing its replay state machine.
 func referenceChatInvocation(records []eventlog.Record) bool {
+	var ok bool
+	records, ok = invocationRecords(records)
+	if !ok {
+		return false
+	}
 	if len(records) != 5 {
 		return false
 	}
@@ -275,4 +296,18 @@ func verifyDigest(value string) bool {
 func verifySHA256(value []byte) string {
 	sum := sha256.Sum256(value)
 	return hex.EncodeToString(sum[:])
+}
+
+// nativeReferenceChat reconstructs only the committed placement bit. It owns no
+// provider and supplies no live native exchange. Replay must consume the exact
+// recorded fingerprint and completion, without issuing any provider grant.
+type nativeReferenceChat struct{ api.Harness }
+type nativeReferenceSink struct{ api.EventSink }
+
+func (s nativeReferenceSink) Model(ctx context.Context, req api.ModelRequest) (api.ModelResponse, error) {
+	req.Native = true
+	return s.EventSink.Model(ctx, req)
+}
+func (h nativeReferenceChat) Run(ctx context.Context, start *api.Start, sink api.EventSink) error {
+	return h.Harness.Run(ctx, start, nativeReferenceSink{sink})
 }

@@ -25,7 +25,10 @@ import (
 const maxAnswerBytes = 1 << 20
 
 type Options struct{ Address, CAFile string }
-type CaseRequest struct{ PortableDigest, CasesDigest, Instructions, Model, Input string }
+type CaseRequest struct {
+	PortableDigest, CasesDigest, Instructions, Model, Input string
+	Harness                                                 string
+}
 type JournalHead struct {
 	Seq  int64
 	Hash string
@@ -56,11 +59,22 @@ func (c *Client) RunCase(ctx context.Context, request CaseRequest) (CaseResult, 
 	return c.runCase(ctx, request, map[string]string{
 		"kmx.portable-digest": request.PortableDigest,
 		"kmx.cases-digest":    request.CasesDigest,
-	}, false, nil)
+	}, false, nil, nil)
 }
 
-func (c *Client) runCase(ctx context.Context, request CaseRequest, labels map[string]string, strict bool, usedSessionUIDs map[string]bool) (CaseResult, error) {
+func (c *Client) runCase(ctx context.Context, request CaseRequest, labels map[string]string, strict bool, usedSessionUIDs map[string]bool, requirement []byte) (CaseResult, error) {
 	var result CaseResult
+	harness := request.Harness
+	if harness == "" {
+		harness = "chat"
+	}
+	if harness != "chat" && harness != "toolchat" {
+		return result, status.Error(codes.InvalidArgument, "agentsessions: unsupported harness")
+	}
+	if harness == "toolchat" && (!strict || len(requirement) == 0) {
+		return result, status.Error(codes.InvalidArgument, "agentsessions: toolchat requires governed suite invocation")
+	}
+	requirement = append([]byte(nil), requirement...)
 	deadline, bounded := ctx.Deadline()
 	if !bounded || !safeIdentity(request.Model) || !utf8.ValidString(request.Instructions) || !utf8.ValidString(request.Input) {
 		return result, status.Error(codes.InvalidArgument, "agentsessions: deadline and valid case request required")
@@ -74,10 +88,12 @@ func (c *Client) runCase(ctx context.Context, request CaseRequest, labels map[st
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	session, err := c.sdk.CreateSession(ctx, &v1.Session{
-		Harness: "chat",
+	createdRequest := &v1.Session{
+		Harness: harness,
 		Labels:  labels,
-	})
+	}
+	setSessionRequirement(createdRequest, requirement)
+	session, err := c.sdk.CreateSession(ctx, createdRequest)
 	if err != nil {
 		return result, safeRPCError(err, "agentsessions: session creation failed")
 	}
@@ -87,7 +103,7 @@ func (c *Client) runCase(ctx context.Context, request CaseRequest, labels map[st
 	if safeIdentity(session.GetHarness()) {
 		result.Harness = session.GetHarness()
 	}
-	if !freshChatSession(session) {
+	if !freshHarnessSession(session, harness) || !matchesSessionRequirement(session, requirement) {
 		return result, status.Error(codes.FailedPrecondition, "agentsessions: invalid created session identity")
 	}
 	if strict && usedSessionUIDs[result.SessionUID] {
@@ -105,7 +121,7 @@ func (c *Client) runCase(ctx context.Context, request CaseRequest, labels map[st
 	}
 	stream, err := c.sdk.Sessions().Exec(ctx, &v1.ExecRequest{
 		Session:         result.SessionUID,
-		Harness:         "chat",
+		Harness:         harness,
 		Inputs:          []*v1.Message{input},
 		Config:          config,
 		ExpectedLastSeq: &zero,
@@ -129,6 +145,8 @@ func (c *Client) runCase(ctx context.Context, request CaseRequest, labels map[st
 		reportError(code, diagnostic)
 	}
 	var seenSession, chainValid, ended, seenStart, seenInput bool
+	var ownership, prepared *v1.Lifecycle
+	var invocationOffset int64
 	var executionID, firstModel string
 	var output strings.Builder
 	var outputOverflow bool
@@ -162,7 +180,7 @@ func (c *Client) runCase(ctx context.Context, request CaseRequest, labels map[st
 		if !seenSession {
 			seenSession = true
 			s := update.GetSession()
-			chainValid = freshChatSession(s) && s.GetMetadata().GetUid() == result.SessionUID
+			chainValid = freshHarnessSession(s, harness) && s.GetMetadata().GetUid() == result.SessionUID && matchesSessionRequirement(s, requirement)
 			if !chainValid {
 				fail(codes.DataLoss, "agentsessions: invalid execution session identity")
 			}
@@ -190,9 +208,34 @@ func (c *Client) runCase(ctx context.Context, request CaseRequest, labels map[st
 				continue
 			}
 			result.Head = JournalHead{Seq: record.Seq, Hash: hash}
+			if preparedEvent(event) {
+				l := event.GetLifecycle()
+				if prepared != nil || ownership != nil || seenStart || record.Seq != 1 || len(requirement) == 0 || l.GetComputeId() != result.SessionUID || l.GetComputeHarness() != harness || !bytes.Equal(l.GetComputeRequirement(), requirement) {
+					fail(codes.DataLoss, "agentsessions: invalid prepared operation prefix")
+					continue
+				}
+				prepared = proto.Clone(l).(*v1.Lifecycle)
+				invocationOffset = 1
+				if strict {
+					captured = append(captured, eventlog.RecordFromProto(proto.Clone(record).(*v1.LogRecord)))
+				}
+				continue // opaque operation is not target/activation or invocation authority
+			}
+			if ownedEvent(event) {
+				if ownership != nil || seenStart || record.Seq != 1+invocationOffset || len(requirement) == 0 || event.GetLifecycle().GetComputeId() != result.SessionUID || event.GetLifecycle().GetComputeHarness() != harness || !bytes.Equal(event.GetLifecycle().GetComputeRequirement(), requirement) {
+					fail(codes.DataLoss, "agentsessions: invalid cleanup ownership prefix")
+					continue
+				}
+				ownership = proto.Clone(event.GetLifecycle()).(*v1.Lifecycle)
+				invocationOffset++
+				if strict {
+					captured = append(captured, eventlog.RecordFromProto(proto.Clone(record).(*v1.LogRecord)))
+				}
+				continue // cleanup metadata is neither invocation nor activation evidence
+			}
 			executionID = event.ExecutionId
 			if strict {
-				if !safeIdentity(executionID) || !suiteRecordShape(record) {
+				if !safeIdentity(executionID) || harness == "chat" && !suiteRecordShapeAt(record, invocationOffset) {
 					fail(codes.DataLoss, "agentsessions: unsupported suite invocation record")
 				}
 				// The bounded copy is isolated from wire buffers before replay.
@@ -207,16 +250,19 @@ func (c *Client) runCase(ctx context.Context, request CaseRequest, labels map[st
 			switch event.Kind {
 			case v1.EventKind_EVENT_EXECUTION_START:
 				start := event.GetExecutionStart()
-				if seenStart || record.Seq != 1 || !bytes.Equal(start.GetConfig(), config) || start.GetResumeFromSeq() != 0 || start.InputCount == nil || start.GetInputCount() != 1 {
+				if prepared != nil && ownership == nil || seenStart || record.Seq != 1+invocationOffset || ownership != nil && start.GetComputeInstance() != ownership.GetComputeInstance() || !bytes.Equal(start.GetConfig(), config) || start.GetResumeFromSeq() != 0 || start.InputCount == nil || start.GetInputCount() != 1 {
 					fail(codes.DataLoss, "agentsessions: invocation start mismatch")
 				}
 				seenStart = true
 			case v1.EventKind_EVENT_INPUT:
-				if !seenStart || seenInput || record.Seq != 2 || !proto.Equal(event.GetMessage(), input) {
+				if !seenStart || seenInput || record.Seq != 2+invocationOffset || !proto.Equal(event.GetMessage(), input) {
 					fail(codes.DataLoss, "agentsessions: invocation input mismatch")
 				}
 				seenInput = true
 			case v1.EventKind_EVENT_MODEL_CALL:
+				if strict && len(requirement) != 0 && !event.GetModel().GetNative() {
+					fail(codes.FailedPrecondition, "agentsessions: governed model must execute in owning harness")
+				}
 				model := event.GetModel().GetModel()
 				if !safeIdentity(model) {
 					fail(codes.FailedPrecondition, "agentsessions: missing or invalid observed model")
@@ -294,10 +340,14 @@ func (c *Client) runCase(ctx context.Context, request CaseRequest, labels map[st
 	if strict && evidenceErr == nil {
 		// Prefix checks already bind the observed config/input to the sent request;
 		// reconstruction additionally verifies the model-request fingerprint.
-		if !referenceChatInvocation(captured) {
+		if !(harness == "toolchat" && toolchatInvocation(captured) || harness == "chat" && referenceChatInvocation(captured)) {
 			fail(codes.DataLoss, "agentsessions: unsupported suite invocation shape")
 		} else {
-			proof, err := referenceChatProof(ctx, captured, request.Model, verifySHA256([]byte(result.Output)))
+			proofFn := referenceChatProof
+			if harness == "toolchat" {
+				proofFn = referenceToolchatProof
+			}
+			proof, err := proofFn(ctx, captured, request.Model, verifySHA256([]byte(result.Output)))
 			if err != nil {
 				evidenceErr = safeRPCError(err, "agentsessions: suite reference verification failed")
 			} else if proof.Status != "equivalent" || proof.ModelCalls != 0 {
@@ -313,8 +363,9 @@ func (c *Client) runCase(ctx context.Context, request CaseRequest, labels map[st
 	return result, evidenceErr
 }
 
-func freshChatSession(s *v1.Session) bool {
-	return s != nil && safeIdentity(s.GetMetadata().GetUid()) && s.GetHarness() == "chat" && s.GetLastSeq() == 0 && s.GetParentUid() == "" && s.GetForkSeq() == 0
+func freshChatSession(s *v1.Session) bool { return freshHarnessSession(s, "chat") }
+func freshHarnessSession(s *v1.Session, harness string) bool {
+	return s != nil && safeIdentity(s.GetMetadata().GetUid()) && s.GetHarness() == harness && s.GetLastSeq() == 0 && s.GetParentUid() == "" && s.GetForkSeq() == 0
 }
 
 // Identities may be printed or persisted by the caller; never retain unbounded,
@@ -350,7 +401,7 @@ func remoteCode(code int32) codes.Code {
 }
 
 func validEvent(e *v1.Event) bool {
-	if e == nil || e.GetExecutionId() == "" || e.GetTs() != nil && e.GetTs().CheckValid() != nil {
+	if e == nil || e.GetExecutionId() == "" && !ownedEvent(e) && !preparedEvent(e) || e.GetTs() != nil && e.GetTs().CheckValid() != nil {
 		return false
 	}
 	var body bool

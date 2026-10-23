@@ -192,7 +192,7 @@ func (r Request) kagent() {
 			fmt.Fprint(r.Stdout, `{"name":"sample","capabilities":{"streaming":true},"defaultInputModes":["text"],"defaultOutputModes":["text"]}`)
 			exit(0)
 		}
-		if call.Body["method"] != "message/send" || !strings.Contains(path, "/api/a2a/agents/sample") {
+		if (call.Body["method"] != "SendMessage" || !strings.Contains(path, "/agents/agents/sample")) && (call.Body["method"] != "message/send" || !strings.Contains(path, "/api/a2a/agents/sample")) {
 			fail()
 		}
 		if scenario == "task-timeout" {
@@ -218,7 +218,8 @@ func (r Request) kagent() {
 			}
 			params, _ := call.Body["params"].(map[string]any)
 			message, _ := params["message"].(map[string]any)
-			if params["configuration"].(map[string]any)["blocking"] != true || message["taskId"] != nil || message["contextId"] != nil {
+			config := params["configuration"].(map[string]any)
+			if (call.Body["method"] == "SendMessage" && config["returnImmediately"] != false) || (call.Body["method"] == "message/send" && config["blocking"] != true) || message["taskId"] != nil || message["contextId"] != nil {
 				fail()
 			}
 			contextID := fmt.Sprintf("context-%d", count)
@@ -235,8 +236,9 @@ func (r Request) kagent() {
 			if scenario == "eval-post-drift" || scenario == "eval-failed-drift" {
 				_ = os.WriteFile(filepath.Join(dir, "evaluation-drift"), []byte(scenario), 0600)
 			}
-			result := map[string]any{"kind": "task", "id": fmt.Sprintf("task-%d", count), "contextId": contextID, "status": map[string]any{"state": state},
-				"artifacts": []any{map[string]any{"artifactId": fmt.Sprintf("answer-%d", count), "parts": []any{map[string]any{"kind": "text", "text": "  exact\nanswer\t "}}}}, "history": []any{message}}
+			legacyMessage := map[string]any{"kind": "message", "role": "user", "messageId": message["messageId"], "parts": []any{map[string]any{"kind": "text", "text": message["parts"].([]any)[0].(map[string]any)["text"]}}}
+			result := map[string]any{"kind": "task", "id": fmt.Sprintf("task-%d", count), "contextId": contextID, "status": map[string]any{"state": state}, "artifacts": []any{map[string]any{"artifactId": fmt.Sprintf("answer-%d", count), "parts": []any{map[string]any{"kind": "text", "text": "  exact\nanswer\t "}}}}, "history": []any{legacyMessage}}
+
 			_ = json.NewEncoder(r.Stdout).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
 			exit(0)
 		}

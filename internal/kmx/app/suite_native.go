@@ -16,6 +16,7 @@ import (
 // Private observation inputs, not a receipt: retain identities and consumed
 // references, never instructions, cases, credential values or arbitrary metadata.
 type suiteNativeSubject struct {
+	ExecutionIdentity                                         string `json:"ExecutionIdentity,omitempty"`
 	PhysicalMember                                            string `json:"PhysicalMember,omitempty"`
 	EvaluationRun                                             string `json:"EvaluationRun,omitempty"`
 	Suite, SuiteDigest, GraphDigest, Member, MemberDigest     string
@@ -49,9 +50,10 @@ type suiteNativeRuntime struct {
 	Helm                                                                     suiteNativeHelmIdentity
 }
 type suiteNativePrepared struct {
-	Subject   suiteNativeSubject
-	bundle    *scaffold.OrkaBundle
-	documents [][]byte
+	requirement []byte
+	Subject     suiteNativeSubject
+	bundle      *scaffold.OrkaBundle
+	documents   [][]byte
 }
 
 // Load owns packaged-input validation; preparation takes only the render frame
@@ -99,8 +101,10 @@ func (a *App) prepareSuiteNativeProjection(ctx context.Context, suite *workspace
 		if err := suite.RequireUnprofiled(); err != nil {
 			return nil, err
 		}
-		if err := suite.RequirePolicyFree(); err != nil {
-			return nil, err
+		if suite.Policy != nil {
+			if _, err := resolveSuiteExecutionRequirement(suite); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if !suiteNativeOrkaInput(suite) {
@@ -145,7 +149,18 @@ func (a *App) prepareSuiteNativeProjection(ctx context.Context, suite *workspace
 	if err != nil {
 		return nil, err
 	}
-	if err := validateOrkaBundle(bundle, validator); err != nil {
+	var requirement *suiteExecutionRequirement
+	if suite.Policy != nil {
+		requirement, err = prepareGovernedSuiteOrka(suite, bundle)
+		if err != nil {
+			return nil, err
+		}
+		for _, doc := range bundle.Documents()[1:] {
+			if err := validator.Validate(doc); err != nil {
+				return nil, err
+			}
+		}
+	} else if err := validateOrkaBundle(bundle, validator); err != nil {
 		return nil, err
 	}
 	rendered, err := orkaRenderedDocuments(bundle)
@@ -157,6 +172,9 @@ func (a *App) prepareSuiteNativeProjection(ctx context.Context, suite *workspace
 		documents = append(documents, doc.Bytes())
 	}
 	subject := suiteNativeSubject{PhysicalMember: physical, EvaluationRun: runID, Suite: suite.Name, SuiteDigest: suite.Digest, GraphDigest: suite.GraphDigest, Member: suite.MemberID, MemberDigest: suite.MemberDigest, InstructionsDigest: suite.InstructionsDigest, CompositionDigest: suite.CompositionDigest, BuildProfileDigest: suite.BuildProfileDigest, Model: suite.Model, Renderer: suite.RendererVersion, RequiredImages: []string{}, Target: target, Binding: binding, Runtime: runtime}
+	if requirement != nil {
+		subject.ExecutionIdentity = requirement.Identity
+	}
 	subject.BindingDigest, err = suiteNativeDigest("kmx.native-orka.binding/v1", struct {
 		Model          string
 		RequiredImages []string
@@ -172,7 +190,14 @@ func (a *App) prepareSuiteNativeProjection(ctx context.Context, suite *workspace
 	if err != nil {
 		return nil, err
 	}
-	return &suiteNativePrepared{Subject: subject, bundle: bundle, documents: documents}, nil
+	var frozen []byte
+	if requirement != nil {
+		frozen, err = json.Marshal(requirement)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &suiteNativePrepared{requirement: frozen, Subject: subject, bundle: bundle, documents: documents}, nil
 }
 
 func suiteNativeOrkaInput(suite *workspace.NativeSuite) bool {

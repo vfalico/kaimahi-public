@@ -28,6 +28,12 @@ var defaultProfile []byte
 const maxFile = 1 << 20
 
 // AgentSessionsVersion pins the host/chat config contract, not a floating release.
+// AgentSessionsToolchatVersion pins the coupled native toolchat implementation.
+const AgentSessionsToolchatVersion = "784fcf432047908a8f3528f15eab4774e61c8c2b"
+
+// KagentCodexVersion pins the selected current-fork API/compiler contract.
+const KagentCodexVersion = "a0ad6cb98b02bf4a3537a2b6fdc04e71f315bdf3"
+
 const AgentSessionsVersion = "ca85f47a2ec17ca6e16029cfa69419cfe29442b3"
 
 var namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
@@ -47,10 +53,10 @@ type sourceRuntime struct {
 }
 
 func (r RuntimeProfile) validate() error {
-	if r == (RuntimeProfile{ID: "orka"}) || r == (RuntimeProfile{ID: "kagent", Version: "v0.10.3", Engine: "go"}) || r == (RuntimeProfile{ID: "agentsessions", Version: AgentSessionsVersion, Engine: "chat"}) {
+	if r == (RuntimeProfile{ID: "kagent", Version: KagentCodexVersion, Engine: "codex"}) || r == (RuntimeProfile{ID: "agentsessions", Version: AgentSessionsToolchatVersion, Engine: "toolchat"}) || r == (RuntimeProfile{ID: "orka"}) || r == (RuntimeProfile{ID: "kagent", Version: "v0.10.3", Engine: "go"}) || r == (RuntimeProfile{ID: "agentsessions", Version: AgentSessionsVersion, Engine: "chat"}) {
 		return nil
 	}
-	return errors.New("runtime must be orka without version/engine, exact kagent v0.10.3 go, or pinned agentsessions chat")
+	return errors.New("runtime must be Orka without version/engine, exact pinned kagent go/codex, or pinned AgentSessions chat/toolchat")
 }
 
 func (r *sourceRuntime) profile() (RuntimeProfile, error) {

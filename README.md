@@ -167,3 +167,15 @@ classifies tracked source and scaffolding; [contributing](CONTRIBUTING.md) defin
 verification and pull-request expectations. See [naming](docs/NAMING.md) for
 publication boundaries. Run `make docs-preview` for the browser-style documentation
 preview generated directly from these Markdown files.
+
+Current-fork Codex authoring checkpoint (offline only): the exact runtime
+`kagent/a0ad6cb98b02bf4a3537a2b6fdc04e71f315bdf3/codex` packages with immutable
+profile `kmx.kagent-a0ad6cb-codex-openai-responses-native-shell/v1` and requires
+an explicit complete policy. `scaffold.GenerateSuiteKagentCodex` emits v1alpha3
+ModelConfig/Harness/Agent with explicit Harness and WorkerPool names, OpenAI
+responses endpoint and secret reference. It is not the legacy v0.10.3 Go
+profile. Public evaluation refuses this current profile before runtime effects
+until placement and attribution qualification is complete. Literal-IP model
+origins are unsupported by the selected real compiler; use an explicit DNS
+origin, never silently rewrite endpoints. Offline packaging and compiler tests
+do not establish deployment, admission, runtime or enforcement acceptance.

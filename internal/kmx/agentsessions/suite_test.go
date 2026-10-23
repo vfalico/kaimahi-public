@@ -54,7 +54,12 @@ func suiteServerForRequest(t *testing.T, r SuiteCaseRequest) *sessionsServer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Exec(t.Context(), chatagent.Harness{Model: r.Model}, []api.Message{*api.TextMessage("user", r.Input)}, 0); err != nil {
+	var harness api.Harness = chatagent.Harness{Model: r.Model}
+	if len(r.ExecutionRequirement) != 0 {
+		calls := new(int)
+		harness = nativeFixtureHarness{chatagent.Harness{Model: r.Model}, calls}
+	}
+	if err := c.Exec(t.Context(), harness, []api.Message{*api.TextMessage("user", r.Input)}, 0); err != nil {
 		t.Fatal(err)
 	}
 	s := &sessionsServer{created: newSession(), updates: []*v1.ExecUpdate{sessionFrame(newSession())}}

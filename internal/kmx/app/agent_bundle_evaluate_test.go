@@ -42,6 +42,9 @@ func newEvalFixture(t *testing.T, cases map[string]string) *evalFixture {
 	fakeTool(t, dir, "kubectl", kubectlFixture(t, "TestEvalKubectlHelper"))
 	t.Setenv("PATH", dir)
 	t.Setenv("KMX_EVAL_DIR", dir)
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("KMX_HOME", filepath.Join(dir, "user-state"))
 	t.Setenv("GORACE", "atexit_sleep_ms=0")
 	out := &bytes.Buffer{}

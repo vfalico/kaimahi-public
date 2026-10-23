@@ -75,11 +75,11 @@ func newAgentCreateCommand(state *commandState) *cobra.Command {
 	cmd.Flags().StringVar(&model, "model", "", "exact authored model identifier (prompted on a visible terminal if omitted)")
 	cmd.Flags().StringVar(&instructions, "instructions", "", "file containing the system message (prompted on a visible terminal if omitted)")
 	cmd.Flags().StringVar(&runtimeID, "runtime", "orka", "agent runtime: orka, kagent or agentsessions")
-	cmd.Flags().StringVar(&version, "runtime-version", "v0.10.3", "exact workspace runtime profile (kagent: v0.10.3; agentsessions: pinned commit)")
-	cmd.Flags().StringVar(&engine, "kagent-runtime", "go", "kagent declarative runtime: go")
+	cmd.Flags().StringVar(&version, "runtime-version", "v0.10.3", "exact workspace runtime profile (kagent: v0.10.3/go or a0ad6cb commit/codex; agentsessions: pinned commit)")
+	cmd.Flags().StringVar(&engine, "kagent-runtime", "go", "kagent runtime: go (v0.10.3) or codex (exact a0ad6cb commit)")
 	_ = cmd.RegisterFlagCompletionFunc("runtime", staticCompletion([]string{"orka", "kagent", "agentsessions"}))
-	_ = cmd.RegisterFlagCompletionFunc("runtime-version", staticCompletion([]string{"v0.10.3", workspace.AgentSessionsVersion}))
-	_ = cmd.RegisterFlagCompletionFunc("kagent-runtime", staticCompletion([]string{"go"}))
+	_ = cmd.RegisterFlagCompletionFunc("runtime-version", staticCompletion([]string{"v0.10.3", workspace.KagentCodexVersion, workspace.AgentSessionsVersion}))
+	_ = cmd.RegisterFlagCompletionFunc("kagent-runtime", staticCompletion([]string{"go", "codex"}))
 	cmd.Args = func(cmd *cobra.Command, args []string) error {
 		if cmd.Flags().Changed("workspace") && strings.TrimSpace(root) == "" {
 			return fmt.Errorf("workspace creation requires a non-empty --workspace directory")
@@ -93,8 +93,8 @@ func newAgentCreateCommand(state *commandState) *cobra.Command {
 		name = args[0]
 		profile = workspace.RuntimeProfile{ID: runtimeID}
 		if runtimeID == "kagent" {
-			if version != "v0.10.3" || engine != "go" {
-				return fmt.Errorf("workspace kagent supports only --runtime-version v0.10.3 and --kagent-runtime go")
+			if (version != "v0.10.3" || engine != "go") && (version != workspace.KagentCodexVersion || engine != "codex") {
+				return fmt.Errorf("workspace kagent requires runtime v0.10.3/go or exact a0ad6cb commit/codex")
 			}
 			profile.Version, profile.Engine = version, engine
 		} else if runtimeID == "agentsessions" {

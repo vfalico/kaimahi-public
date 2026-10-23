@@ -22,6 +22,7 @@ type suiteCandidateResource struct {
 	SpecDigest, ParentKind, ParentUID string
 }
 type suiteCandidateRun struct {
+	requirement                      []byte
 	subject                          suiteNativeSubject
 	checkSource                      func(context.Context) error
 	intents, acknowledged            []suiteCandidateResource
@@ -34,7 +35,7 @@ func newSuiteCandidateRun(p *suiteNativePrepared, checkSource func(context.Conte
 	}
 	s := p.Subject
 	s.RequiredImages = append([]string{}, s.RequiredImages...)
-	return &suiteCandidateRun{subject: s, checkSource: checkSource}, nil
+	return &suiteCandidateRun{requirement: append([]byte(nil), p.requirement...), subject: s, checkSource: checkSource}, nil
 }
 
 // Snapshot includes independent server ACKs even after hashing or cancellation fails.
@@ -279,7 +280,7 @@ func (a *App) placeSuiteNativeCandidate(ctx context.Context, p *suiteNativePrepa
 			return nil, err
 		}
 	}
-	result := &suiteNativePlacement{Subject: r.subject}
+	result := &suiteNativePlacement{requirement: append([]byte(nil), r.requirement...), Subject: r.subject}
 	owned := []*suiteNativeOwnedResource{&result.Provider, &result.Agent}
 	ns := r.subject.Target.Namespace
 	for i, doc := range docs {

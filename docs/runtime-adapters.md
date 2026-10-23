@@ -201,3 +201,58 @@ Retirement receipts grant no environment teardown authority. Read the
 [lifecycle decision](kmx-lifecycle-interfaces.md) and
 [application API](kmx-application-api.md) for signatures, persistence and recovery
 boundaries. Concrete orchestration remains follow-up work.
+
+### Prepared compute cleanup prefix
+
+The governed Sessions stream may begin with one host-authored COMPUTE_PREPARED
+record, then COMPUTE_OWNED, then EXECUTION_START. Prepared operation bytes remain
+opaque to Kaimahi; they are not Suite membership, target selection, activation
+or dispatch authority. The reader requires exact session/harness/requirement,
+bounded nonempty opaque bytes, no UID/runtime authority on PREPARED, known wire
+shape and intact full hash chain. It retains the original full chain without
+rehashing or discarding cleanup records; the invocation view begins only at
+EXECUTION_START. Existing one-record ownership prefixes remain accepted.
+
+
+### Current native Codex: explicit existing-agent development lane
+
+`kmx create NAME --runtime kagent --runtime-version
+ a0ad6cb98b02bf4a3537a2b6fdc04e71f315bdf3 --kagent-runtime codex
+ --model MODEL --instructions FILE --workspace DIR` authors the distinct native
+profile. It does not deploy. An operator prepares the exact current Agent,
+ModelConfig and Harness using the current public Kubernetes API and ordinary
+controller configuration. No legacy Go Deployment readiness assumptions apply.
+
+Use `kmx eval --workspace DIR --current-kagent-host PRIVATE.json --out RESULT.json`.
+The closed JSON file (schemaVersion 1) has address (literal loopback host:port),
+namespace, agent, harness, workerPool, snapshotLocation, baseURL, secretName and
+secretKey. These are references, never secret values. Both file and immediate
+parent must be private, regular/no-symlink, with no unsafe ancestor directories.
+The model name, prompt, description, cases and policy come from the packaged
+workspace, never the host selector. Current Codex renderer requires the explicit
+DNS model URL; authored literal-IP network policy still governs its resolved
+traffic and control-plane endpoints with no implicit grants.
+
+The public API is explicitly unauthenticated loopback development, not remote
+host identity attestation. Exact Agent spec and observed generation/Ready and
+successful desired revision, ModelConfig and Harness specs and their UIDs are
+checked before and after execution. The client creates a fresh public Session
+with the complete immutable opaque requirement, then submits a blocking A2A
+Task using its ContextID and same requirement. It validates the returned Session
+revision/requirement and attributed Task history/output. No Guardd calls, native
+launching, target selection or manual status mutation occur in Kaimahi.
+
+Each Session is deleted before a result is exported. An uncertain Create reply
+retries the same request ID and bytes with a bounded recovery context; deletion
+is retried against the same Session ID. A second unresolved failure remains an
+error (upstream durable operation may remain; no success is exported). Case
+repeat/minPass semantics use the shared evaluator. Result is a distinct unsigned
+standalone development observation, NOT a managed passing/push receipt. Explicit
+`--out` is required; managed promotion, cluster/inference/bindings, result-port,
+other development host and JSON-mode selectors refuse. Policy-free suites retain
+normal native behavior. Authored empty allow runs only network-independent work;
+model/control-plane requirements are not silently added to make inference work.
+
+The bounded client embeds a descriptor set generated from the canonical current
+kagent public proto schemas (Apache-2.0), not copied runtime implementation.
+See `internal/kmx/kagentcurrent/README.md` for exact regeneration and provenance.
