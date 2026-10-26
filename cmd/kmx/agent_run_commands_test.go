@@ -22,6 +22,9 @@ func TestRunAndResultCommandValidation(t *testing.T) {
 		{[]string{"run", "agents/sample", "--prompt", "hello", "--context", "kind-test"}, "usage"},
 		{[]string{"run", "--agent", "sample", "--prompt", "hello", "--to-context", "kind-test"}, "--to-context"},
 		{[]string{"run", "--agent", "sample", "--prompt", "hello", "--wait", "0s"}, "--wait"},
+		{[]string{"run", "agents/sample", "--enforcement-file", "requirement.json"}, "--enforcement-file"},
+		{[]string{"run", "--agent", "sample", "--prompt", "hello", "--enforcement-file", ""}, "--enforcement-file"},
+		{[]string{"chat", "sample", "--enforcement-file", ""}, "--enforcement-file"},
 		{[]string{"task", "result", "sample", "--wait", "0s"}, "--wait"},
 		{[]string{"task", "result"}, "usage"},
 	} {
